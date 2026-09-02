@@ -250,6 +250,7 @@ async def handle_conductor(message: str) -> str:
                 "cdt": "messages", "session": arg,
                 "title": cdt.session_title(arg),
                 "items": cdt.get_messages(arg),
+                "has_token": bool(cdt.API_TOKEN),
             })
         if verb == "send":
             sid, _, text = arg.partition(":")
