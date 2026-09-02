@@ -1,246 +1,310 @@
 # Mac Remote Controller
 
-**Control your Mac — and the [Conductor](https://conductor.build) app running on it — straight from your iPhone (or any phone/browser), from anywhere.**
+Control your Mac, and the Conductor app running on it, from an iPhone or any
+browser on your Tailnet.
 
-You leave your MacBook at home with Conductor running its coding agents. From
-your phone on cellular you open a web page, type a code once, and you can:
+This project runs a small Python WebSocket server on the Mac. The bundled web
+UI lets you browse Conductor projects and chats, read transcripts, start new
+Conductor tasks, run shell commands, and keep the Mac awake while you are away.
 
-- **Browse every Conductor project and chat**, see which agents are working vs.
-  idle, and read the live transcript of any session.
-- **Send a new command/prompt into any Conductor chat** — i.e. drive your
-  Conductor agents remotely while you're away from the desk.
-- **Run any shell command** on the Mac (`ls`, `cd`, `git …`) with a real,
-  persistent working directory.
-- **Keep the Mac awake** so agents keep running while the lid's closed.
-
-```
- iPhone / any browser  ──ws──►  Mac (Python server)  ──►  Conductor app (read DB + CLI)
-         │                              │              └─►  shell commands
-         │                              └─►  pyautogui UI clicks (optional)
-         └──────────── Tailscale VPN (encrypted, works anywhere) ───────────┘
+```text
+phone/browser -> Tailscale -> Mac Python server -> Conductor app
+                                             \-> local shell commands
+                                             \-> optional UI automation
 ```
 
----
+## What Works
 
-## 🎯 What it's for
+- Browse Conductor projects and chats from the mobile web UI.
+- Read recent messages from a Conductor chat.
+- Start a new Conductor task in a selected project.
+- Reply to an existing Conductor chat when `CONDUCTOR_API_TOKEN` is set.
+- Run shell commands on the Mac with a persistent working directory per socket.
+- Toggle `caffeinate` to keep the Mac awake.
+- Optionally drive the Mac UI with `pyautogui` coordinates.
 
-The **main purpose is to operate the Conductor app from your phone** — to give
-commands to your Conductor coding agents directly from your phone without being
-at your Mac. Everything else (the remote shell, keep-awake, optional UI
-automation) is supporting plumbing around that goal.
+## Conductor Behavior
 
-How the Conductor bridge works (see `server/conductor.py`):
+The Conductor bridge is implemented in `server/conductor.py`.
 
-- **Reading** projects / chats / messages needs **no token** — it reads
-  Conductor's local SQLite database (`~/Library/Application Support/com.conductor.app/conductor.db`) read-only.
-- **Sending — free by default.** With no token set, hitting Send starts a **new
-  Conductor task** in that chat's project using the official `conductor://`
-  deep link (`open conductor://prompt=…&path=…`). Conductor spins up a fresh
-  workspace/agent on your prompt. This is completely free.
-- **Sending — into an existing chat (optional, paid).** Continuing a specific
-  existing session isn't possible for free (Conductor only exposes new-task deep
-  links). If you set a `CONDUCTOR_API_TOKEN`, Send instead posts into the exact
-  existing chat via the Conductor CLI/API.
+- Reading projects, chats, and messages does not need a token. The server opens
+  Conductor's local SQLite database read-only:
+  `~/Library/Application Support/com.conductor.app/conductor.db`.
+- Starting a new task does not need a token. The server opens a
+  `conductor://prompt=...&path=...` deep link. With autosubmit enabled, it then
+  brings Conductor forward and presses Enter.
+- Replying to an existing chat requires `CONDUCTOR_API_TOKEN`. When the token is
+  set, the server uses the Conductor CLI at:
+  `~/Library/Application Support/com.conductor.app/bin/conductor`.
+- Without `CONDUCTOR_API_TOKEN`, sending from an existing chat starts a new task
+  in that chat's project instead of appending to the old session.
 
----
+## Quick Start
 
-## ⚡ Quick start (the simple version)
-
-**On the MacBook — one command:**
+On the Mac:
 
 ```bash
 cd server
 ./start.sh
 ```
 
-This brings up Tailscale, installs what it needs (into a local `.venv`), and
-starts everything. It prints a box like:
+`start.sh`:
 
+- tries to bring up Tailscale,
+- creates `server/.venv` if needed,
+- installs the core Python dependencies used by the browser flow,
+- starts the WebSocket server and static web UI.
+
+It prints URLs and an auth code:
+
+```text
+Mac Remote is ready.
+Tailscale is ON - reachable from anywhere:
+  ->  http://100.x.x.x:8080
+AUTH CODE:  922031
 ```
-  Tailscale is ON — reachable from anywhere:
-    ->  http://100.x.x.x:8080
-  AUTH CODE:  922031
-```
 
-(If you ran `brew install qrencode` first, it also prints a scannable QR code
-that logs you in automatically.)
+On the phone:
 
-**On the iPhone — one step to connect:**
+1. Install Tailscale and sign in with the same account as the Mac.
+2. Turn Tailscale on.
+3. Open the printed `http://100.x.x.x:8080` URL.
+4. Enter the auth code and tap Connect.
+5. Tap Conductor to browse projects, chats, and tasks.
 
-1. Install the **Tailscale app**, sign in with the **same account** as the Mac,
-   and toggle it **on**.
-2. Open **Safari** and go to the `http://100.x.x.x:8080` URL the Mac printed
-   (or point the **Camera** at the QR code and tap the banner — it auto-fills
-   the code).
-3. The server address is pre-filled — type the **auth code** and tap
-   **Connect**.
-4. Tap **🎛 Conductor** in the header to browse your projects/chats and send
-   commands. Or use the terminal directly: `ls -la`, `cd Desktop`, `pwd`.
+If `qrencode` is installed, `start.py` prints a QR code that includes the auth
+code in the URL hash so the web UI can auto-fill it.
 
-That's it. Everything below is detail / optional extras.
+## Repository Layout
 
----
+| Path | Purpose |
+| --- | --- |
+| `server/start.sh` | Recommended launcher. Sets up the venv, tries Tailscale, then runs `start.py`. |
+| `server/start.py` | Starts the WebSocket server plus static web server on `WEB_PORT` (default `8080`). |
+| `server/server.py` | Auth, WebSocket protocol, shell execution, keep-awake toggle, and Conductor routes. |
+| `server/conductor.py` | Read-only Conductor DB access plus deep-link/API send helpers. |
+| `server/web/index.html` | Mobile browser UI for terminal and Conductor control. |
+| `server/client.py` | Minimal CLI client for testing `ws://host:8765`. |
+| `server/calibrate.py` | Helper for finding mouse coordinates for optional UI automation. |
+| `server/coordinates.example.json` | Example `pyautogui` coordinate map. |
+| `server/.env.example` | Environment variable template. |
+| `server/discord_reader.py` | Optional helper to read auth codes from Discord with a bot token. |
+| `ios/MacRemote/` | Optional SwiftUI client files for a simple native iOS app. |
 
-## Layout
-
-| Path | What it is |
-|------|------------|
-| `server/start.py` | **One-command launcher** — WebSocket server + phone-friendly web terminal, prints URL/QR/code |
-| `server/start.sh` | Wrapper that also brings up Tailscale and sets up the venv |
-| `server/server.py` | WebSocket server: auth + shell commands + Conductor bridge + optional pyautogui UI control |
-| `server/conductor.py` | Bridge to the Conductor app (reads its SQLite DB, sends via the Conductor CLI) |
-| `server/web/index.html` | The **web terminal + Conductor browser** you open in any phone/desktop browser |
-| `server/client.py` | Minimal CLI test client (no phone/browser needed) |
-| `server/calibrate.py` | Prints live mouse coordinates so you can map buttons (for optional UI automation) |
-| `server/coordinates.example.json` | Template for the button-coordinate map |
-| `server/.env.example` | Template for config (Conductor token, code delivery, ports) |
-| `ios/MacRemote/` | Optional native SwiftUI iOS app (drop into an Xcode iOS App project) |
-
----
-
-## Setup (Mac)
+## Setup
 
 ### 1. Network
 
-Install [Tailscale](https://tailscale.com/download/mac) on **both** the Mac and
-your phone, signed into the **same account**. Tailscale is what makes the Mac
-reachable from anywhere (cellular included) over an encrypted tunnel — no port
-forwarding, no exposing anything to the public internet.
+Install Tailscale on the Mac and phone, using the same Tailscale account. This
+lets the phone reach the Mac over a private encrypted network without port
+forwarding.
 
-> Same-Wi-Fi also works as a fallback; `start.py` prints a `http://192.168.x.x`
-> LAN URL when Tailscale isn't logged in.
+Same-Wi-Fi can also work. If Tailscale is unavailable, `start.py` prints a LAN
+URL such as `http://192.168.x.x:8080`.
 
-### 2. Install the server
+### 2. Environment
+
+Create a local `.env` when you need persistent settings:
 
 ```bash
 cd server
-python3 -m venv .venv && source .venv/bin/activate
+cp .env.example .env
+```
+
+Important variables:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `HOST_IP` | `0.0.0.0` | WebSocket listen address. |
+| `PORT` | `8765` | WebSocket port used by the web UI and CLI client. |
+| `WEB_PORT` | `8080` | Static web UI port used by `start.py`. |
+| `AUTH_CODE` | random 6 digits | Optional fixed auth code. If unset, a new code is generated on startup. |
+| `MAX_AUTH_ATTEMPTS` | `5` | Failed auth attempts before the socket is closed. |
+| `CONDUCTOR_API_TOKEN` | empty | Required only to reply to an existing Conductor chat. |
+| `CONDUCTOR_AUTOSUBMIT` | `1` | Press Enter after opening a new-task deep link. |
+| `CONDUCTOR_SUBMIT_DELAY` | `4` | Seconds to wait before autosubmit. |
+| `CONDUCTOR_SUBMIT_KEY` | `enter` | Use `enter` or `cmd-enter` for autosubmit. |
+| `DISCORD_WEBHOOK_URL` | empty | Optional auth-code delivery target. |
+| `EMAIL_SENDER` / `EMAIL_PASSWORD` / `EMAIL_RECEIVER` | empty | Optional email delivery settings. |
+| `COORDINATES_FILE` | `coordinates.json` | Coordinate map for optional UI automation. |
+
+`CONDUCTOR_API_TOKEN` must be present in `.env` or the environment of the Python
+server process. Running a CLI login by itself is not enough for this server
+unless it also provides that environment variable.
+
+### 3. Dependencies
+
+The recommended browser flow needs:
+
+```bash
+pip install websockets python-dotenv
+```
+
+`./start.sh` installs those into `server/.venv` automatically.
+
+For optional coordinate-based UI automation, also install:
+
+```bash
+pip install --prefer-binary pyautogui
+```
+
+`server/requirements.txt` includes both the core and optional Python packages if
+you prefer installing everything manually:
+
+```bash
+cd server
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env          # then edit .env (see below)
 ```
 
-### 3. Configure `.env`
+## Running
 
-The two things that matter most for the Conductor use-case:
-
-- **`CONDUCTOR_API_TOKEN`** — required to *send* commands into chats (browsing
-  works without it). Get it from the Conductor app / your account, or run
-  `conductor auth login`.
-- **`AUTH_CODE`** — optionally set a fixed 6-digit code you'll remember, so you
-  can connect from far away without seeing the Mac's screen. If left unset a
-  fresh random code is generated on every start.
-
-Optional — deliver the auth code to a channel you can read on the go (only
-needed if you *don't* set a fixed `AUTH_CODE`):
-
-- **Discord (easiest):** paste a channel webhook URL into `DISCORD_WEBHOOK_URL`.
-- **Email:** set `EMAIL_SENDER` / `EMAIL_PASSWORD` / `EMAIL_RECEIVER` (Gmail
-  needs an App Password).
-
-### 4. (Optional) UI automation permission
-
-Only if you want the `NEW_CHAT` / `TYPE:` pyautogui clicking features:
-
-- Grant **System Settings → Privacy & Security → Accessibility** to the app that
-  runs Python (Terminal / iTerm / VS Code / Cursor).
-- Run `python3 calibrate.py`, hover over each button, and put the X/Y into a
-  `coordinates.json` (copy from `coordinates.example.json`).
-
-The shell + Conductor features work fine without this; pyautogui is optional and
-degrades gracefully if it isn't installed.
-
----
-
-## Start it
+Recommended:
 
 ```bash
 cd server
-./start.sh            # recommended: also brings up Tailscale + venv
-# or:
-python3 start.py      # server + web terminal only (venv already active)
-# or:
-python3 server.py     # just the WebSocket server, no bundled web terminal
+./start.sh
 ```
 
-`start.py` prints your connect URL, a QR code, and the auth code.
+Manual alternatives:
 
----
+```bash
+cd server
+python3 start.py    # WebSocket server plus browser UI
+python3 server.py   # WebSocket server only
+```
 
-## Connect from your phone (or any device)
+Do not expose ports `8765` or `8080` to the public internet. Use Tailscale or a
+trusted private network.
 
-1. Turn on **Tailscale** on the phone (same account as the Mac).
-2. Open the `http://100.x.x.x:8080` URL that `start.py` printed — in Safari,
-   Chrome, any browser. Or scan the printed QR with the Camera app (it logs you
-   in for you).
-3. Enter the **auth code** → **Connect**.
-4. Use it:
-   - **🎛 Conductor** (header) → browse projects/chats, open a chat to read the
-     transcript, type into the box and **Send** to give that agent a command.
-   - **Terminal** → `ls`, `cd`, `git status`, anything; `cd` persists between
-     commands. Quick-tap buttons for `ls -la` / `pwd` / `clear`, and ▲/▼ recall
-     history.
-   - **☕ Awake toggle** (top-right) → keeps the Mac awake via `caffeinate` so
-     commands keep landing while you're away.
+## Browser UI
 
-Works on iPhone, Android, iPad, or another computer — anything with a browser on
-your Tailnet. No app install required.
+After connecting:
 
-> If the phone won't connect it's almost always (a) Tailscale off / wrong IP,
-> (b) the server isn't running or a firewall blocks the port, or (c) you opened
-> the page over `https` while the socket is `ws://` — use the exact `http://…:8080`
-> URL that `start.py` prints.
+- Tap Conductor to open the mobile Conductor browser.
+- Projects shows every visible Conductor repo.
+- Project chats shows chat status, unread counts, branch/workspace info, and
+  recent update time.
+- New task opens a bottom sheet where you choose a project and prompt.
+- Opening a chat shows recent transcript messages.
+- The chat input replies to the existing chat when an API token is configured;
+  otherwise it starts a new task in that project.
+- Terminal runs local shell commands. `cd` persists for that WebSocket session.
+- Awake toggles `caffeinate` on the Mac.
 
----
+## Optional UI Automation
 
-## Optional: native iOS app
+The `NEW_CHAT`, `NEXT_CHAT`, `PREV_CHAT`, and `TYPE:<text>` commands use
+`pyautogui` and screen coordinates.
 
-The web terminal already works great on the phone, so the native app is only if
-you want a home-screen icon.
+To enable them:
 
-1. In Xcode, create a new **iOS App** project (SwiftUI, named `MacRemote`).
-2. Replace the generated `MacRemoteApp.swift` / `ContentView.swift` with the
-   files in `ios/MacRemote/`.
-3. Run on your iPhone, enter the Mac's Tailscale IP + code, and connect.
+1. Install `pyautogui`.
+2. Grant Accessibility permission in macOS to the app running Python, such as
+   Terminal, iTerm, VS Code, or Cursor.
+3. Run:
 
-> Because it connects over plain `ws://`, add an **App Transport Security**
-> exception (`NSAllowsLocalNetworking` or an ATS exception for the Tailscale
-> host). The Tailscale tunnel itself is encrypted end-to-end.
+   ```bash
+   cd server
+   python3 calibrate.py
+   ```
 
----
+4. Copy `server/coordinates.example.json` to `server/coordinates.json` and fill
+   in the real coordinates.
 
-## Protocol reference
+The browser terminal and Conductor database/deep-link features work without
+`pyautogui`.
 
-**Conductor (client → server), returns JSON the web UI parses:**
+## Optional Native iOS App
+
+The browser UI is the primary client. The SwiftUI files under `ios/MacRemote/`
+are a minimal native WebSocket client for manual control commands.
+
+To use them:
+
+1. Create a new SwiftUI iOS app in Xcode.
+2. Replace the generated app/content files with the files in `ios/MacRemote/`.
+3. Configure App Transport Security for local `ws://` connections, for example
+   with `NSAllowsLocalNetworking` or a host-specific exception.
+4. Run on the phone and connect to the Mac's Tailscale IP on port `8765`.
+
+## Protocol
+
+The first message on every WebSocket connection must be the auth code. After
+`AUTH_SUCCESS`, these messages are supported.
+
+### Conductor
 
 | Message | Result |
-|---------|--------|
-| `CDT:projects` | list of repos/projects |
-| `CDT:sessions` | all chats with project, status, unread |
-| `CDT:messages:<sessionId>` | recent transcript of a chat |
-| `CDT:send:<sessionId>:<text>` | queue `<text>` into that chat (needs token) |
+| --- | --- |
+| `CDT:projects` | Return visible Conductor projects/repos. |
+| `CDT:sessions` | Return visible chats with project, status, unread count, branch, workspace, and update time. |
+| `CDT:messages:<sessionId>` | Return recent readable transcript messages for a chat. |
+| `CDT:send:<sessionId>:<text>` | Reply to the chat when `CONDUCTOR_API_TOKEN` is set; otherwise start a new task in that chat's project. |
+| `CDT:newtask:<repoPath>:<text>` | Start a new Conductor task using a deep link. `repoPath` may be empty. |
 
-**General commands:**
+### General
 
-| Message | Action on Mac |
-|---------|---------------|
-| `CMD:<shell>` | Run `<shell>` in the session's cwd; return output. `cd` persists |
-| `PWD` | Return the current working directory |
-| `AWAKE_ON` / `AWAKE_OFF` | Start/stop `caffeinate` (keep Mac + display awake) |
-| `AWAKE_STATUS` | Report whether keep-awake is on |
-| `NEW_CHAT` | Click the `new_chat` coordinate (pyautogui) |
-| `NEXT_CHAT` / `PREV_CHAT` | Click `next_chat` / `prev_chat` (if defined) |
-| `TYPE:<text>` | Click `input_box`, type `<text>`, press Enter |
+| Message | Action |
+| --- | --- |
+| `CMD:<shell>` | Run a shell command in the session cwd and return combined output. |
+| `PWD` | Return the session cwd. |
+| `AWAKE_ON` / `AWAKE_OFF` | Start or stop `caffeinate -dimsu`. |
+| `AWAKE_STATUS` | Return `AWAKE_ON` or `AWAKE_OFF`. |
+| `NEW_CHAT` | Click the configured `new_chat` coordinate. |
+| `NEXT_CHAT` / `PREV_CHAT` | Click configured chat navigation coordinates. |
+| `TYPE:<text>` | Click the configured input coordinate, type text, and press Enter. |
 
----
+## Testing
 
-## Notes & hardening
+CLI smoke test:
 
-- **Auth:** a 6-digit code (fixed or regenerated each start) that locks a client
-  after `MAX_AUTH_ATTEMPTS` wrong tries.
-- **Fail-safe:** slam the mouse into any screen corner to instantly abort UI
-  automation (`pyautogui.FAILSAFE`).
-- **Read-only DB access:** Conductor's database is opened read-only — browsing
-  never disturbs the live app.
-- Secrets (`.env`) and your real `coordinates.json` are git-ignored.
-- This is meant for controlling **your own** Mac over **your own** Tailnet.
-  Don't expose port `8765` / `8080` to the public internet.
+```bash
+cd server
+python3 server.py
+```
+
+In another terminal:
+
+```bash
+cd server
+python3 client.py localhost 8765
+```
+
+For the browser UI, use:
+
+```bash
+cd server
+python3 start.py
+```
+
+Then open `http://localhost:8080` on the Mac or the printed Tailscale/LAN URL
+from another device.
+
+## Troubleshooting
+
+- Phone cannot connect: confirm Tailscale is on, use the exact printed
+  `http://...:8080` URL, and make sure the Python process is still running.
+- Auth fails: use the latest printed or delivered code. If `AUTH_CODE` is unset,
+  it changes every server start.
+- Projects/chats do not load: make sure Conductor is installed for this user and
+  its database exists at the expected path, or set `CONDUCTOR_DB`.
+- Existing-chat replies fail: set `CONDUCTOR_API_TOKEN` in the server
+  environment and confirm the Conductor CLI path, or set `CONDUCTOR_CLI`.
+- New-task autosubmit does not press Enter: grant Accessibility permission to
+  the app running Python, increase `CONDUCTOR_SUBMIT_DELAY`, or set
+  `CONDUCTOR_AUTOSUBMIT=0` and submit manually in Conductor.
+- UI-click commands fail: install `pyautogui`, grant Accessibility permission,
+  and create `server/coordinates.json`.
+- Browser uses stale code or UI: `start.py` sends no-cache headers, but a hard
+  refresh or reopening the tab may still help on mobile Safari.
+
+## Security Notes
+
+- The server uses a shared auth code and closes the socket after too many failed
+  attempts.
+- Tailscale limits reachability to devices on your Tailnet.
+- The Conductor database is opened read-only.
+- `.env` and `server/coordinates.json` are gitignored.
+- This is intended for controlling your own Mac on a trusted private network.
