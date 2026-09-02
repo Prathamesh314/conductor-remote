@@ -217,6 +217,9 @@ function print(text, cls) {
 
 function setConnected(on) {
   $("statusDot").classList.toggle("on", on);
+  // Label the button by what it will DO next: disconnect when live,
+  // reconnect when the socket has dropped.
+  $("disconnectBtn").textContent = on ? "Disconnect" : "Connect";
 }
 
 function connect() {
@@ -302,7 +305,13 @@ function send(raw) {
 // Wiring
 $("connectBtn").onclick = connect;
 $("code").addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
-$("disconnectBtn").onclick = () => { if (ws) ws.close(); location.reload(); };
+$("disconnectBtn").onclick = () => {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.close();            // live → drop the connection (onclose flips the label)
+  } else {
+    connect();             // dropped → reconnect to the Mac
+  }
+};
 $("cmd").addEventListener("keydown", (e) => {
   if (e.key === "Enter") {
     send($("cmd").value);
