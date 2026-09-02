@@ -1064,13 +1064,18 @@ function renderChats() {
   for (const s of sess) {
     const card = document.createElement("div");
     card.className = "card";
+    // Conductor labels an untitled/empty chat by its workspace, not "Untitled".
+    const branchTail = (s.branch || "").split("/").pop();
+    const name = (s.title && s.title !== "Untitled")
+      ? s.title
+      : (s.workspace_name || branchTail || "Untitled");
     const sub = [s.branch || s.workspace_name || "", relTime(s.updated_at)].filter(Boolean).join(" · ");
     card.innerHTML =
       `<div class="body"><div class="title2"></div><div class="sub"></div></div>` +
       statusBadge(s) + `<span class="chev">›</span>`;
-    card.querySelector(".title2").textContent = s.title || "Untitled";
+    card.querySelector(".title2").textContent = name;
     card.querySelector(".sub").textContent = sub;
-    card.onclick = () => openChat(s.id, s.title || "Untitled");
+    card.onclick = () => openChat(s.id, name);
     wrap.appendChild(card);
   }
   box.appendChild(wrap);
