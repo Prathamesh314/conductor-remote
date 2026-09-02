@@ -81,7 +81,9 @@ def screen_ocr() -> list[dict]:
 
 
 def _norm(s: str) -> str:
-    return "".join(ch for ch in s.lower() if ch.isalnum() or ch == " ").strip()
+    # Case-insensitive AND separator-insensitive: "Astana", "astana",
+    # "porto-novo", "Porto Novo", "porto_novo" all collapse to one form.
+    return "".join(ch for ch in s.lower() if ch.isalnum())
 
 
 def find_target(candidates, items: list[dict]) -> dict | None:
