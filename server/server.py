@@ -24,6 +24,7 @@ import shlex
 import smtplib
 import ssl
 import subprocess
+import time
 import urllib.request
 from email.message import EmailMessage
 from pathlib import Path
@@ -237,6 +238,27 @@ def set_caffeinate(on: bool) -> str:
         return "AWAKE_OFF"
 
 
+# Remembers the last time each (session, text) was sent, so a duplicate
+# request (double tap, phone key + Enter, an impatient re-send) doesn't drive
+# the Conductor UI — or hit the API — a second time. UI automation is slow and
+# synchronous, which is exactly when accidental duplicates arrive.
+_recent_sends: dict[tuple[str, str], float] = {}
+_DUP_WINDOW_S = float(os.environ.get("CDT_DUP_WINDOW_S", "15"))
+
+
+def _is_duplicate_send(sid: str, text: str) -> bool:
+    """True if this exact (session, text) was just sent within the dedup window."""
+    now = time.monotonic()
+    # Drop stale entries so the map can't grow without bound.
+    for k, t in list(_recent_sends.items()):
+        if now - t > 60:
+            _recent_sends.pop(k, None)
+    key = (sid, text)
+    last = _recent_sends.get(key)
+    _recent_sends[key] = now
+    return last is not None and (now - last) < _DUP_WINDOW_S
+
+
 async def handle_conductor(message: str) -> str:
     """Handle CDT:* commands, returning a JSON string the web UI parses."""
     rest = message.split("CDT:", 1)[1]
@@ -255,6 +277,13 @@ async def handle_conductor(message: str) -> str:
             })
         if verb == "send":
             sid, _, text = arg.partition(":")
+            if _is_duplicate_send(sid, text):
+                # Same message just went out — swallow the duplicate so the
+                # agent isn't asked twice. The client keeps polling and will
+                # show the reply from the first send.
+                print(f"[dedup] ignored duplicate send to {sid}")
+                return json.dumps({"cdt": "sent", "session": sid, "ok": True,
+                                   "mode": "duplicate", "note": "Already sent."})
             if cdt.API_TOKEN:
                 # Paid API: continue the existing chat.
                 result = await asyncio.to_thread(cdt.send_message, sid, text)
