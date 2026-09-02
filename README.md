@@ -89,7 +89,7 @@ code in the URL hash so the web UI can auto-fill it.
 | `server/coordinates.example.json` | Example `pyautogui` coordinate map. |
 | `server/.env.example` | Environment variable template. |
 | `server/discord_reader.py` | Optional helper to read auth codes from Discord with a bot token. |
-| `ios/MacRemote/` | Optional SwiftUI client files for a simple native iOS app. |
+| `ios/MacRemote/` | SwiftUI files for a full native iOS app (browse chats, read transcripts, reply, start tasks, shell, keep-awake). |
 
 ## Setup
 
@@ -218,13 +218,21 @@ The browser terminal and Conductor database/deep-link features work without
 
 ## Optional Native iOS App
 
-The browser UI is the primary client. The SwiftUI files under `ios/MacRemote/`
-are a minimal native WebSocket client for manual control commands.
+A full native SwiftUI client lives under `ios/MacRemote/`. It has a dark,
+minimalist design and covers the main workflow:
 
-To use them:
+- Connect + authenticate with the Mac's Tailscale IP and the emailed code.
+- Browse Conductor chats (workspace-centric, newest first) with search.
+- Read a chat's transcript in message bubbles; it polls for new replies.
+- Reply into a chat, or start a new task from any project.
+- Run shell commands with a persistent working directory.
+- Toggle keep-awake (`caffeinate`) and see connection/API-token status.
 
-1. Create a new SwiftUI iOS app in Xcode.
-2. Replace the generated app/content files with the files in `ios/MacRemote/`.
+To use it:
+
+1. Create a new SwiftUI iOS app in Xcode named `MacRemote`.
+2. Delete the generated `ContentView.swift`/app file and add every file from
+   `ios/MacRemote/` to the target.
 3. Configure App Transport Security for local `ws://` connections, for example
    with `NSAllowsLocalNetworking` or a host-specific exception.
 4. Run on the phone and connect to the Mac's Tailscale IP on port `8765`.
