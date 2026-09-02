@@ -261,8 +261,10 @@ async def handle_conductor(message: str) -> str:
                 result.setdefault("mode", "api")
             else:
                 # Free: reply into the SAME chat by driving the Conductor UI.
-                title = cdt.session_title(sid)
-                result = await asyncio.to_thread(cui.open_chat_and_send, title, text)
+                # Search for the chat by title AND its workspace/branch name
+                # (e.g. "istanbul"), since that's what the sidebar shows.
+                terms = cdt.session_search_terms(sid) or [cdt.session_title(sid)]
+                result = await asyncio.to_thread(cui.open_chat_and_send, terms, text)
             return json.dumps({"cdt": "sent", "session": sid, **result})
         if verb == "newtask":
             path, _, text = arg.partition(":")

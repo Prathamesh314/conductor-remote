@@ -142,6 +142,45 @@ def session_title(session_id: str) -> str:
     return (row["title"] if row else None) or "Chat"
 
 
+def session_search_terms(session_id: str) -> list[str]:
+    """Candidate strings to look for on screen when locating this chat.
+
+    Conductor's sidebar shows the workspace's directory/branch name (e.g.
+    "istanbul"), not the chat title — so we return both, plus the branch's
+    last path segment, deduped in priority order.
+    """
+    with _connect() as c:
+        row = c.execute(
+            """
+            SELECT s.title, w.directory_name, w.workspace_name,
+                   w.branch, w.DEPRECATED_city_name AS city
+            FROM sessions s
+            LEFT JOIN workspaces w ON s.workspace_id = w.id
+            WHERE s.id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+
+    terms: list[str] = []
+    if row:
+        branch = row["branch"]
+        for v in (row["directory_name"], row["workspace_name"], row["city"],
+                  branch, row["title"]):
+            if v:
+                terms.append(v)
+        if branch and "/" in branch:
+            terms.append(branch.rsplit("/", 1)[-1])
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in terms:
+        key = t.strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(t)
+    return out
+
+
 def deeplink_url(prompt: str, repo_path: str | None = None) -> str:
     """Build a conductor:// deep link that creates a new task with `prompt`."""
     url = "conductor://prompt=" + quote(prompt, safe="")

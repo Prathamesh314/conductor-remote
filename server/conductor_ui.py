@@ -84,29 +84,37 @@ def _norm(s: str) -> str:
     return "".join(ch for ch in s.lower() if ch.isalnum() or ch == " ").strip()
 
 
-def find_target(title: str, items: list[dict]) -> dict | None:
-    """Best sidebar OCR match for a chat title."""
-    want = _norm(title)
-    if not want:
-        return None
+def find_target(candidates, items: list[dict]) -> dict | None:
+    """Best sidebar OCR match for any of the candidate names.
+
+    `candidates` may be a single string or a list (chat title, workspace/
+    directory name like "istanbul", branch, etc.). We try them all and keep the
+    single best-scoring on-screen match.
+    """
+    if isinstance(candidates, str):
+        candidates = [candidates]
     best, best_score = None, 0.0
-    for it in items:
-        if it["x"] > SIDEBAR_MAX_X:
+    for title in candidates:
+        want = _norm(title)
+        if not want:
             continue
-        got = _norm(it.get("text", ""))
-        if not got:
-            continue
-        if got == want:
-            score = 1.0
-        elif want.startswith(got) or got.startswith(want):
-            score = 0.85 * min(len(got), len(want)) / max(len(got), len(want))
-        elif want in got or got in want:
-            score = 0.7 * min(len(got), len(want)) / max(len(got), len(want))
-        else:
-            continue
-        score += (1.0 - it["y"]) * 0.05          # gently prefer higher rows
-        if score > best_score:
-            best, best_score = it, score
+        for it in items:
+            if it["x"] > SIDEBAR_MAX_X:
+                continue
+            got = _norm(it.get("text", ""))
+            if not got:
+                continue
+            if got == want:
+                score = 1.0
+            elif want.startswith(got) or got.startswith(want):
+                score = 0.85 * min(len(got), len(want)) / max(len(got), len(want))
+            elif want in got or got in want:
+                score = 0.7 * min(len(got), len(want)) / max(len(got), len(want))
+            else:
+                continue
+            score += (1.0 - it["y"]) * 0.05          # gently prefer higher rows
+            if score > best_score:
+                best, best_score = it, score
     return best
 
 
@@ -134,21 +142,29 @@ def type_and_send(text: str) -> None:
         pg.press("enter")
 
 
-def open_chat_and_send(title: str, text: str) -> dict:
-    """Activate Conductor, click the chat by title, type + send. Returns status."""
+def open_chat_and_send(candidates, text: str) -> dict:
+    """Activate Conductor, click the chat by any of its names, type + send.
+
+    `candidates` is the chat title and/or its workspace/directory/branch names
+    (e.g. "istanbul") — whatever Conductor shows in the sidebar.
+    """
+    if isinstance(candidates, str):
+        candidates = [candidates]
+    label = candidates[0] if candidates else "?"
     try:
         activate_conductor()
         time.sleep(0.7)
         items = screen_ocr()
-        target = find_target(title, items)
+        target = find_target(candidates, items)
         if not target:
-            return {"ok": False, "error": f"Couldn't find chat '{title}' on screen. "
-                    "Open Conductor so the chat is visible in the sidebar."}
+            tried = ", ".join(repr(c) for c in candidates)
+            return {"ok": False, "error": f"Couldn't find the chat on screen "
+                    f"(looked for {tried}). Open Conductor so it's visible in the sidebar."}
         click_norm(target["x"], target["y"])
         time.sleep(0.7)
         type_and_send(text)
         return {"ok": True, "mode": "uiauto",
-                "note": f"Typed into '{title}' and pressed send."}
+                "note": f"Typed into '{target.get('text', label)}' and pressed send."}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": str(exc)}
 
