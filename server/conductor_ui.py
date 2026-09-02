@@ -33,6 +33,12 @@ _OCR_BIN = _HERE / ".ocr_bin"
 
 # Only look for chat rows in the left part of the screen (the sidebar).
 SIDEBAR_MAX_X = float(os.environ.get("CONDUCTOR_SIDEBAR_MAX_X", "0.40"))
+# X position (fraction of width) to place the cursor over when scrolling.
+SIDEBAR_SCROLL_X = float(os.environ.get("CONDUCTOR_SIDEBAR_X", "0.12"))
+# Max scroll steps when hunting for an off-screen chat.
+MAX_SCROLLS = int(os.environ.get("CONDUCTOR_MAX_SCROLLS", "12"))
+# Click the project header first (helps when its group is collapsed).
+CLICK_PROJECT_FIRST = os.environ.get("CONDUCTOR_CLICK_PROJECT_FIRST", "1").strip().lower() not in ("0", "false", "no")
 # Optional composer click point "x,y" normalized (0..1) if auto-focus fails.
 COMPOSER_XY = os.environ.get("CONDUCTOR_COMPOSER_XY", "").strip()
 SUBMIT_KEY = os.environ.get("CONDUCTOR_SUBMIT_KEY", "enter").strip().lower()
@@ -126,6 +132,39 @@ def click_norm(nx: float, ny: float) -> None:
     pg.click(int(nx * w), int(ny * h))
 
 
+def _scroll(amount: int) -> None:
+    """Scroll the sidebar (positive = up, negative = down)."""
+    pg = _lazy_pyautogui()
+    w, h = pg.size()
+    pg.moveTo(int(SIDEBAR_SCROLL_X * w), int(h * 0.5))
+    pg.scroll(amount)
+
+
+def scroll_find(candidates, click: bool = False) -> dict | None:
+    """Scroll the sidebar from top to bottom, OCR at each step, and return (or
+    click) the first matching row — so a chat need not already be on screen."""
+    for _ in range(MAX_SCROLLS):          # jump to the top first
+        _scroll(800)
+    time.sleep(0.25)
+    seen: set = set()
+    for _ in range(MAX_SCROLLS * 2 + 1):
+        items = screen_ocr()
+        target = find_target(candidates, items)
+        if target:
+            if click:
+                click_norm(target["x"], target["y"])
+                time.sleep(0.6)
+            return target
+        # Stop if the visible sidebar text stops changing (reached the bottom).
+        sig = tuple(_norm(it["text"]) for it in items if it["x"] < SIDEBAR_MAX_X)
+        if sig and sig in seen:
+            break
+        seen.add(sig)
+        _scroll(-400)
+        time.sleep(0.3)
+    return None
+
+
 def type_and_send(text: str) -> None:
     pg = _lazy_pyautogui()
     if COMPOSER_XY:
@@ -144,29 +183,43 @@ def type_and_send(text: str) -> None:
         pg.press("enter")
 
 
-def open_chat_and_send(candidates, text: str) -> dict:
-    """Activate Conductor, click the chat by any of its names, type + send.
+def open_chat_and_send(nav, text: str) -> dict:
+    """Activate Conductor, scroll the sidebar to the chat, click it, type + send.
 
-    `candidates` is the chat title and/or its workspace/directory/branch names
-    (e.g. "istanbul") — whatever Conductor shows in the sidebar.
+    `nav` may be:
+      * a dict from conductor.session_nav_info(): {project, workspace_terms,
+        session_terms, ...} — the robust path (scrolls to find it), or
+      * a str / list of candidate names (legacy).
     """
-    if isinstance(candidates, str):
-        candidates = [candidates]
-    label = candidates[0] if candidates else "?"
+    if isinstance(nav, str):
+        nav = {"workspace_terms": [nav]}
+    elif isinstance(nav, list):
+        nav = {"workspace_terms": nav}
+
+    project = nav.get("project")
+    chat_terms = (nav.get("workspace_terms") or []) + (nav.get("session_terms") or [])
+    if not chat_terms:
+        return {"ok": False, "error": "No chat name to search for."}
+
     try:
         activate_conductor()
         time.sleep(0.7)
-        items = screen_ocr()
-        target = find_target(candidates, items)
+
+        # 1) Make sure the chat's project group is expanded/visible.
+        if CLICK_PROJECT_FIRST and project:
+            scroll_find([project], click=True)
+
+        # 2) Scroll-find the chat/workspace and click it.
+        target = scroll_find(chat_terms, click=True)
         if not target:
-            tried = ", ".join(repr(c) for c in candidates)
-            return {"ok": False, "error": f"Couldn't find the chat on screen "
-                    f"(looked for {tried}). Open Conductor so it's visible in the sidebar."}
-        click_norm(target["x"], target["y"])
-        time.sleep(0.7)
+            tried = ", ".join(repr(c) for c in chat_terms)
+            return {"ok": False, "error": "Couldn't find the chat in Conductor's "
+                    f"sidebar (looked for {tried}). Is it archived/hidden?"}
+
+        # 3) Type into the composer and send.
         type_and_send(text)
         return {"ok": True, "mode": "uiauto",
-                "note": f"Typed into '{target.get('text', label)}' and pressed send."}
+                "note": f"Opened '{target.get('text', chat_terms[0])}' and sent."}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": str(exc)}
 

@@ -276,6 +276,49 @@
     border: 1px solid var(--cdt-line);
     border-radius: 8px;
   }
+  .cdt-offline {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 10px 12px 0;
+    padding: 10px 12px;
+    background: rgba(255, 255, 255, .76);
+    border: 1px solid rgba(217, 109, 75, .28);
+    border-radius: 8px;
+    box-shadow: 0 8px 22px rgba(53, 45, 36, .07);
+    color: var(--cdt-muted);
+    font-size: 13px;
+    font-weight: 650;
+    animation: cdt-rise .24s ease both;
+  }
+  .cdt-offline::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--cdt-warm);
+    flex: none;
+  }
+  .cdt-offline span {
+    flex: 1;
+    min-width: 0;
+  }
+  .cdt-offline button {
+    min-height: 34px;
+    padding: 0 13px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--cdt-warm);
+    color: #fff;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 760;
+    cursor: pointer;
+  }
+  .cdt-offline button:disabled {
+    cursor: default;
+    opacity: .72;
+  }
 
   .fab {
     position: absolute;
@@ -460,7 +503,7 @@
     font-family: inherit;
   }
   @media (prefers-reduced-motion: reduce) {
-    .card, .fab, .bubble2, .sheet, .dot-pulse { animation: none; }
+    .card, .fab, .bubble2, .sheet, .dot-pulse, .cdt-offline { animation: none; }
     #conductorView header button,
     #conductorView .inputbar button,
     .sheet .actions button,
@@ -514,6 +557,10 @@
     <span class="spacer"></span>
     <button id="cdtRefresh" title="Refresh">↻</button>
   </header>
+  <div id="cdtOffline" class="cdt-offline hidden">
+    <span id="cdtOfflineText">Device disconnected.</span>
+    <button id="cdtReconnect">Connect</button>
+  </div>
 
   <!-- Level 1: Projects -->
   <div id="cdtProjects" class="cdt-screen"></div>
@@ -617,19 +664,36 @@ function setConnected(on) {
   // Label the button by what it will DO next: disconnect when live,
   // reconnect when the socket has dropped.
   $("disconnectBtn").textContent = on ? "Disconnect" : "Connect";
+  $("cdtOffline").classList.toggle("hidden", on);
+  $("cdtOfflineText").textContent = on ? "" : "Device disconnected.";
+  $("cdtReconnect").textContent = "Connect";
+  $("cdtReconnect").disabled = false;
 }
 
 function connect() {
+  const resumeConductor = !$("conductorView").classList.contains("hidden");
   const host = $("host").value.trim();
   const code = $("code").value.trim();
-  if (!host || !code) { $("connectStatus").textContent = "Enter host and code."; return; }
+  if (!host || !code) {
+    $("connectStatus").textContent = "Enter host and code.";
+    if (resumeConductor) $("cdtOfflineText").textContent = "Enter host and auth code on the Connect screen.";
+    return;
+  }
   localStorage.setItem("mrt.host", host);
 
   $("connectStatus").textContent = "Connecting…";
+  if (resumeConductor) {
+    $("cdtOffline").classList.remove("hidden");
+    $("cdtOfflineText").textContent = "Connecting…";
+    $("cdtReconnect").textContent = "Connecting…";
+    $("cdtReconnect").disabled = true;
+  }
   try {
     ws = new WebSocket(`ws://${host}:${PORT}`);
   } catch (e) {
     $("connectStatus").textContent = "Bad address: " + e.message;
+    if (resumeConductor) $("cdtOfflineText").textContent = "Bad address: " + e.message;
+    setConnected(false);
     return;
   }
 
@@ -642,16 +706,38 @@ function connect() {
       if (msg === "AUTH_SUCCESS") {
         authed = true;
         $("connectView").classList.add("hidden");
-        $("termView").classList.remove("hidden");
+        if (resumeConductor) {
+          showConductor(true);
+        } else {
+          $("termView").classList.remove("hidden");
+          $("conductorView").classList.add("hidden");
+          $("cmd").focus();
+        }
         setConnected(true);
         localStorage.setItem("mrt.code", code);  // remember for next time
         print("Authenticated. Connected to " + host, "sys");
-        $("cmd").focus();
         ws.send("AWAKE_STATUS");   // sync the keep-awake toggle
+        if (resumeConductor) {
+          if (cdtLevel === "chat" && cdtCurrentSession) {
+            sendRaw("CDT:messages:" + cdtCurrentSession);
+          } else {
+            loadConductor();
+          }
+        }
       } else if (msg === "AUTH_FAILED") {
         $("connectStatus").textContent = "Wrong code — try again.";
+        if (resumeConductor) {
+          $("cdtOfflineText").textContent = "Wrong code. Update it on the Connect screen.";
+          $("cdtReconnect").textContent = "Connect";
+          $("cdtReconnect").disabled = false;
+        }
       } else if (msg === "AUTH_LOCKED") {
         $("connectStatus").textContent = "Locked. Restart the Mac server.";
+        if (resumeConductor) {
+          $("cdtOfflineText").textContent = "Locked. Restart the Mac server.";
+          $("cdtReconnect").textContent = "Connect";
+          $("cdtReconnect").disabled = false;
+        }
       }
       return;
     }
@@ -668,6 +754,7 @@ function connect() {
   };
   ws.onerror = () => {
     $("connectStatus").textContent = "Connection error. Check IP / server / ATS.";
+    if (resumeConductor) $("cdtOfflineText").textContent = "Connection error. Check IP / server / ATS.";
     setConnected(false);
   };
   ws.onclose = () => {
@@ -988,6 +1075,11 @@ $("cdtBack").onclick = () => {
 $("cdtRefresh").onclick = () => {
   if (cdtLevel === "chat" && cdtCurrentSession) sendRaw("CDT:messages:" + cdtCurrentSession);
   else loadConductor();
+};
+// Reconnect straight from the offline banner, without leaving the current page.
+$("cdtReconnect").onclick = () => {
+  if (ws && ws.readyState === WebSocket.OPEN) return;   // already connected
+  connect();
 };
 $("cdtFab").onclick = openSheet;
 $("cdtCancel").onclick = closeSheet;
