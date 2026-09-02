@@ -33,8 +33,14 @@ How the Conductor bridge works (see `server/conductor.py`):
 
 - **Reading** projects / chats / messages needs **no token** — it reads
   Conductor's local SQLite database (`~/Library/Application Support/com.conductor.app/conductor.db`) read-only.
-- **Sending** a message into a chat uses the **Conductor CLI**, which needs a
-  `CONDUCTOR_API_TOKEN`.
+- **Sending — free by default.** With no token set, hitting Send starts a **new
+  Conductor task** in that chat's project using the official `conductor://`
+  deep link (`open conductor://prompt=…&path=…`). Conductor spins up a fresh
+  workspace/agent on your prompt. This is completely free.
+- **Sending — into an existing chat (optional, paid).** Continuing a specific
+  existing session isn't possible for free (Conductor only exposes new-task deep
+  links). If you set a `CONDUCTOR_API_TOKEN`, Send instead posts into the exact
+  existing chat via the Conductor CLI/API.
 
 ---
 
