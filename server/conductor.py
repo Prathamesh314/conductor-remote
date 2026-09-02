@@ -11,12 +11,20 @@ import json
 import os
 import sqlite3
 import subprocess
+import time
 from urllib.parse import quote
 
 _SUPPORT = os.path.expanduser("~/Library/Application Support/com.conductor.app")
 DB_PATH = os.environ.get("CONDUCTOR_DB", os.path.join(_SUPPORT, "conductor.db"))
 CLI_PATH = os.environ.get("CONDUCTOR_CLI", os.path.join(_SUPPORT, "bin", "conductor"))
 API_TOKEN = os.environ.get("CONDUCTOR_API_TOKEN", "").strip()
+
+# After a deep link pre-fills the prompt, press the send key so the agent
+# actually starts (true remote fire-and-forget). Needs Accessibility permission.
+AUTO_SUBMIT = os.environ.get("CONDUCTOR_AUTOSUBMIT", "1").strip().lower() not in ("0", "false", "no")
+SUBMIT_DELAY = float(os.environ.get("CONDUCTOR_SUBMIT_DELAY", "4"))
+# "enter" (default) or "cmd-enter" if your Conductor sends on ⌘-Enter.
+SUBMIT_KEY = os.environ.get("CONDUCTOR_SUBMIT_KEY", "enter").strip().lower()
 
 
 def available() -> bool:
@@ -142,19 +150,56 @@ def deeplink_url(prompt: str, repo_path: str | None = None) -> str:
     return url
 
 
+def _submit_keystroke() -> None:
+    """Bring Conductor to the front and press the send key."""
+    key = ("keystroke return using command down"
+           if SUBMIT_KEY in ("cmd-enter", "cmd", "command", "cmd-return")
+           else "keystroke return")
+    script = (
+        'tell application "Conductor" to activate\n'
+        'delay 0.5\n'
+        f'tell application "System Events" to {key}'
+    )
+    subprocess.run(["osascript", "-e", script], check=True, timeout=15,
+                   capture_output=True, text=True)
+
+
 def new_task(prompt: str, repo_path: str | None = None) -> dict:
     """Create a new Conductor task/workspace with a prompt (FREE, no token).
 
-    Uses the official conductor:// deep link, opened via `open`.
+    Uses the official conductor:// deep link, opened via `open`. The deep link
+    only *pre-fills* the prompt, so (if AUTO_SUBMIT) we then press the send key
+    to actually start the agent.
     """
     url = deeplink_url(prompt, repo_path)
     try:
         subprocess.run(["open", url], check=True, timeout=10)
-        where = repo_path or "the first available repo"
-        return {"ok": True, "mode": "deeplink",
-                "note": f"Started a NEW Conductor task in {where}."}
     except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "mode": "deeplink", "error": str(exc)}
+        return {"ok": False, "mode": "deeplink", "error": f"open failed: {exc}"}
+
+    where = repo_path or "the first available repo"
+    note = f"Started a new Conductor task in {where}."
+
+    if not AUTO_SUBMIT:
+        return {"ok": True, "mode": "deeplink",
+                "note": note + " Prompt pre-filled — press Enter in Conductor to send."}
+
+    time.sleep(SUBMIT_DELAY)
+    try:
+        _submit_keystroke()
+        return {"ok": True, "mode": "deeplink", "note": note + " Prompt sent ✓"}
+    except subprocess.CalledProcessError as exc:
+        err = (exc.stderr or "").strip()
+        if "not allowed to send keystrokes" in err or "1002" in err:
+            hint = ("Prompt is pre-filled but NOT sent — grant Accessibility "
+                    "permission to the app running this server, then it will "
+                    "auto-send. (Or press Enter in Conductor.)")
+        else:
+            hint = f"Prompt pre-filled; auto-send failed ({err[:80]}). Press Enter in Conductor."
+        return {"ok": True, "mode": "deeplink", "submitted": False, "note": note + " " + hint}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": True, "mode": "deeplink", "submitted": False,
+                "note": note + f" Auto-send failed: {exc}. Press Enter in Conductor."}
 
 
 def new_task_for_session(session_id: str, prompt: str) -> dict:
