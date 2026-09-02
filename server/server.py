@@ -253,8 +253,18 @@ async def handle_conductor(message: str) -> str:
             })
         if verb == "send":
             sid, _, text = arg.partition(":")
-            result = await asyncio.to_thread(cdt.send_message, sid, text)
+            if cdt.API_TOKEN:
+                # Paid API: continue the existing chat.
+                result = await asyncio.to_thread(cdt.send_message, sid, text)
+                result.setdefault("mode", "api")
+            else:
+                # Free: start a new task in that chat's project via deep link.
+                result = await asyncio.to_thread(cdt.new_task_for_session, sid, text)
             return json.dumps({"cdt": "sent", "session": sid, **result})
+        if verb == "newtask":
+            path, _, text = arg.partition(":")
+            result = await asyncio.to_thread(cdt.new_task, text, path or None)
+            return json.dumps({"cdt": "sent", **result})
     except Exception as exc:  # noqa: BLE001 - surface any DB/CLI error to the UI
         return json.dumps({"cdt": "error", "error": str(exc)})
     return json.dumps({"cdt": "error", "error": f"unknown conductor verb: {verb}"})

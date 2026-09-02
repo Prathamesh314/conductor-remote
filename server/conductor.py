@@ -11,6 +11,7 @@ import json
 import os
 import sqlite3
 import subprocess
+from urllib.parse import quote
 
 _SUPPORT = os.path.expanduser("~/Library/Application Support/com.conductor.app")
 DB_PATH = os.environ.get("CONDUCTOR_DB", os.path.join(_SUPPORT, "conductor.db"))
@@ -32,10 +33,25 @@ def _connect() -> sqlite3.Connection:
 def list_projects() -> list[dict]:
     with _connect() as c:
         rows = c.execute(
-            "SELECT id, name, default_branch FROM repos "
+            "SELECT id, name, default_branch, root_path FROM repos "
             "WHERE COALESCE(hidden,0)=0 ORDER BY display_order, name"
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def repo_path_for_session(session_id: str) -> str | None:
+    with _connect() as c:
+        row = c.execute(
+            """
+            SELECT r.root_path
+            FROM sessions s
+            LEFT JOIN workspaces w ON s.workspace_id = w.id
+            LEFT JOIN repos r ON w.repository_id = r.id
+            WHERE s.id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+    return row["root_path"] if row and row["root_path"] else None
 
 
 def list_sessions() -> list[dict]:
@@ -116,6 +132,34 @@ def session_title(session_id: str) -> str:
             "SELECT title FROM sessions WHERE id=?", (session_id,)
         ).fetchone()
     return (row["title"] if row else None) or "Chat"
+
+
+def deeplink_url(prompt: str, repo_path: str | None = None) -> str:
+    """Build a conductor:// deep link that creates a new task with `prompt`."""
+    url = "conductor://prompt=" + quote(prompt, safe="")
+    if repo_path:
+        url += "&path=" + quote(repo_path, safe="")
+    return url
+
+
+def new_task(prompt: str, repo_path: str | None = None) -> dict:
+    """Create a new Conductor task/workspace with a prompt (FREE, no token).
+
+    Uses the official conductor:// deep link, opened via `open`.
+    """
+    url = deeplink_url(prompt, repo_path)
+    try:
+        subprocess.run(["open", url], check=True, timeout=10)
+        where = repo_path or "the first available repo"
+        return {"ok": True, "mode": "deeplink",
+                "note": f"Started a NEW Conductor task in {where}."}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "mode": "deeplink", "error": str(exc)}
+
+
+def new_task_for_session(session_id: str, prompt: str) -> dict:
+    """Free send: start a new task in the same project as the given chat."""
+    return new_task(prompt, repo_path_for_session(session_id))
 
 
 def send_message(session_id: str, text: str) -> dict:
