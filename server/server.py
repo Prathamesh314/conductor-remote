@@ -262,11 +262,23 @@ async def handle_conductor(message: str) -> str:
             else:
                 # Free: reply into the SAME chat by driving the Conductor UI.
                 # nav_info gives the project + workspace/branch names so the
-                # automation can scroll the sidebar to the chat even when it
-                # isn't currently on screen.
+                # automation can scroll/filter to the chat.
                 nav = cdt.session_nav_info(sid) or {
                     "workspace_terms": [cdt.session_title(sid)]}
                 result = await asyncio.to_thread(cui.open_chat_and_send, nav, text)
+                if not result.get("ok"):
+                    # Chat not found / UI automation failed → fall back to the
+                    # OLD deep-link solution: create a NEW task in the SAME
+                    # project (repo path comes from this chat's session).
+                    fb = await asyncio.to_thread(cdt.new_task_for_session, sid, text)
+                    if fb.get("ok"):
+                        fb["fallback"] = True
+                        fb["note"] = ("Couldn't open the existing chat, so started "
+                                      "a new task in the same project instead.")
+                        result = fb
+                    elif fb.get("repo_missing"):
+                        # Git repo absent on disk → surface that, do NOT create.
+                        result = fb
             return json.dumps({"cdt": "sent", "session": sid, **result})
         if verb == "newtask":
             path, _, text = arg.partition(":")
