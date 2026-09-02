@@ -63,40 +63,46 @@ def repo_path_for_session(session_id: str) -> str | None:
 
 
 def list_sessions() -> list[dict]:
-    """Real chats, newest first, with their workspace + project names.
+    """Chats, newest first, mirroring what the Conductor app shows.
 
-    Mirrors what the Conductor app shows on its main list, so the phone doesn't
-    surface phantom rows the Mac hides:
-      * hidden / remote-archived sessions are skipped;
-      * sessions in an archived workspace are skipped;
-      * empty "Untitled" drafts (no title, no messages) are skipped — unless
-        just created (<15 min), so a task you started still appears while it
-        gets its name and first reply.
+    Conductor's sidebar is workspace-centric: it shows exactly one chat per
+    workspace (labelled by the workspace, not the session title), even for a
+    brand-new workspace whose only session is still an empty "Untitled" draft.
+    A single workspace can accumulate several sessions over time, but the app
+    still shows it as one chat. So to match the counts the Mac shows we:
+
+      * skip hidden / remote-archived sessions;
+      * skip sessions in an archived workspace;
+      * collapse each workspace to a single row, keeping its most recently
+        updated session as the representative chat.
+
+    (Sessions with no workspace — none exist today — are treated as their own
+    single-row "workspace" via COALESCE, so they are never merged together.)
     """
     with _connect() as c:
         rows = c.execute(
             """
-            SELECT s.id, s.title, s.status,
-                   COALESCE(s.unread_count,0) AS unread,
-                   s.updated_at, s.model,
-                   w.workspace_name, w.branch,
-                   r.name AS project, r.id AS project_id
-            FROM sessions s
-            LEFT JOIN workspaces w ON s.workspace_id = w.id
-            LEFT JOIN repos r ON w.repository_id = r.id
-            WHERE COALESCE(s.is_hidden,0)=0
-              AND s.remote_archived_at IS NULL
-              AND COALESCE(w.state, '') != 'archived'
-              AND (
-                    (s.title IS NOT NULL AND s.title != '' AND s.title != 'Untitled')
-                 OR julianday(s.created_at) >= julianday('now', '-15 minutes')
-                 OR EXISTS (
-                      SELECT 1 FROM session_messages m
-                      WHERE m.session_id = s.id
-                        AND m.content IS NOT NULL AND m.content != ''
-                    )
-              )
-            ORDER BY s.updated_at DESC
+            SELECT id, title, status, unread, updated_at, model,
+                   workspace_name, branch, project, project_id
+            FROM (
+                SELECT s.id, s.title, s.status,
+                       COALESCE(s.unread_count,0) AS unread,
+                       s.updated_at, s.model,
+                       w.workspace_name, w.branch,
+                       r.name AS project, r.id AS project_id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY COALESCE(s.workspace_id, s.id)
+                           ORDER BY s.updated_at DESC, s.created_at DESC
+                       ) AS rn
+                FROM sessions s
+                LEFT JOIN workspaces w ON s.workspace_id = w.id
+                LEFT JOIN repos r ON w.repository_id = r.id
+                WHERE COALESCE(s.is_hidden,0)=0
+                  AND s.remote_archived_at IS NULL
+                  AND COALESCE(w.state, '') != 'archived'
+            )
+            WHERE rn = 1
+            ORDER BY updated_at DESC
             """
         ).fetchall()
     return [dict(r) for r in rows]
