@@ -1344,6 +1344,8 @@ function handleConductor(obj) {
   }
   if (obj.cdt === "messages") {
     cdtHasToken = !!obj.has_token;
+    // Keep the header title in sync (e.g. once a new task gets named).
+    if (obj.session === cdtCurrentSession && obj.title) $("cdtTitle").textContent = obj.title;
     updateComposerMode();
     return renderMessages(obj.session, obj.items || []);
   }
@@ -1351,7 +1353,18 @@ function handleConductor(obj) {
     if (sheetOpen()) {                     // came from the New Task sheet
       $("cdtCreateStatus").textContent = obj.ok
         ? (obj.note || "Done ✓") : ("Failed: " + (obj.error || "unknown"));
-      if (obj.ok) setTimeout(() => { closeSheet(); if (cdtCurrentProject) setLevel("chats"); sendRaw("CDT:sessions"); }, 1300);
+      if (obj.ok) setTimeout(() => {
+        closeSheet();
+        sendRaw("CDT:sessions");                    // refresh the list behind us
+        if (obj.new_session) {
+          // Jump straight into the workspace we just created.
+          openChat(obj.new_session, "New task");
+        } else if (cdtCurrentProject) {
+          setLevel("chats");
+        } else {
+          setLevel("projects");
+        }
+      }, 1300);
       return;
     }
     if (!obj.ok) {

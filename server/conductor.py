@@ -63,7 +63,16 @@ def repo_path_for_session(session_id: str) -> str | None:
 
 
 def list_sessions() -> list[dict]:
-    """All chats, newest first, with their workspace + project names."""
+    """Real chats, newest first, with their workspace + project names.
+
+    Mirrors what the Conductor app shows on its main list, so the phone doesn't
+    surface phantom rows the Mac hides:
+      * hidden / remote-archived sessions are skipped;
+      * sessions in an archived workspace are skipped;
+      * empty "Untitled" drafts (no title, no messages) are skipped — unless
+        just created (<15 min), so a task you started still appears while it
+        gets its name and first reply.
+    """
     with _connect() as c:
         rows = c.execute(
             """
@@ -76,10 +85,46 @@ def list_sessions() -> list[dict]:
             LEFT JOIN workspaces w ON s.workspace_id = w.id
             LEFT JOIN repos r ON w.repository_id = r.id
             WHERE COALESCE(s.is_hidden,0)=0
+              AND s.remote_archived_at IS NULL
+              AND COALESCE(w.state, '') != 'archived'
+              AND (
+                    (s.title IS NOT NULL AND s.title != '' AND s.title != 'Untitled')
+                 OR julianday(s.created_at) >= julianday('now', '-15 minutes')
+                 OR EXISTS (
+                      SELECT 1 FROM session_messages m
+                      WHERE m.session_id = s.id
+                        AND m.content IS NOT NULL AND m.content != ''
+                    )
+              )
             ORDER BY s.updated_at DESC
             """
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def newest_session_for_repo(repo_path: str | None, within_seconds: int = 180) -> str | None:
+    """Id of the most recently created session in a repo (created recently).
+
+    Used right after starting a new task so the phone can jump straight into
+    the freshly created chat instead of staying on the old one.
+    """
+    if not repo_path:
+        return None
+    with _connect() as c:
+        row = c.execute(
+            """
+            SELECT s.id
+            FROM sessions s
+            LEFT JOIN workspaces w ON s.workspace_id = w.id
+            LEFT JOIN repos r ON w.repository_id = r.id
+            WHERE r.root_path = ?
+              AND julianday(s.created_at) >= julianday('now', ?)
+            ORDER BY s.created_at DESC
+            LIMIT 1
+            """,
+            (repo_path, f"-{int(within_seconds)} seconds"),
+        ).fetchone()
+    return row["id"] if row else None
 
 
 WORKSPACES_ROOT = os.path.expanduser("~/conductor/workspaces")
@@ -282,13 +327,18 @@ def new_task(prompt: str, repo_path: str | None = None) -> dict:
     note = f"Started a new Conductor task in {where}."
 
     if not AUTO_SUBMIT:
+        # Give Conductor a moment to create the workspace, then hand back the
+        # new session id so the phone can jump straight into it.
+        time.sleep(min(SUBMIT_DELAY, 3))
         return {"ok": True, "mode": "deeplink",
-                "note": note + " Prompt pre-filled — press Enter in Conductor to send."}
+                "note": note + " Prompt pre-filled — press Enter in Conductor to send.",
+                "new_session": newest_session_for_repo(repo_path)}
 
     time.sleep(SUBMIT_DELAY)
     try:
         _submit_keystroke()
-        return {"ok": True, "mode": "deeplink", "note": note + " Prompt sent ✓"}
+        return {"ok": True, "mode": "deeplink", "note": note + " Prompt sent ✓",
+                "new_session": newest_session_for_repo(repo_path)}
     except subprocess.CalledProcessError as exc:
         err = (exc.stderr or "").strip()
         if "not allowed to send keystrokes" in err or "1002" in err:
