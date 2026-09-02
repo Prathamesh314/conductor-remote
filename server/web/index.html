@@ -383,6 +383,22 @@
   }
   .row-user .who2 { text-align: right; }
 
+  /* Send/reply status line under the composer */
+  #cdtSendStatus { font-size: 12px; line-height: 1.45; }
+  #cdtSendStatus:empty { display: none; }
+  #cdtSendStatus.info { color: var(--cdt-muted); padding: 0 14px 8px; }
+  #cdtSendStatus.ok { color: var(--cdt-good); font-weight: 650; padding: 4px 14px 8px; }
+  #cdtSendStatus.err {
+    margin: 4px 12px 10px;
+    padding: 10px 12px;
+    background: #e5484d;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 650;
+    border-radius: 10px;
+    box-shadow: 0 8px 20px rgba(229, 72, 77, .28);
+  }
+
   #conductorView .inputbar {
     padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
     background: rgba(247, 244, 238, .86);
@@ -575,7 +591,7 @@
       <input id="cdtInput" placeholder="Message this chat…" autocapitalize="sentences" />
       <button id="cdtSend" class="prominent">Send</button>
     </div>
-    <div id="cdtSendStatus" class="sys" style="padding:0 14px 8px;font-size:12px;color:var(--muted)"></div>
+    <div id="cdtSendStatus"></div>
   </div>
 
   <!-- Floating New Task button (projects & chats levels) -->
@@ -940,12 +956,20 @@ function renderChats() {
   box.appendChild(wrap);
 }
 
+// Status line under the composer. kind: "info" (muted) | "ok" | "err" (red).
+function setSendStatus(msg, kind) {
+  const el = $("cdtSendStatus");
+  el.textContent = msg || "";
+  el.classList.remove("info", "ok", "err");
+  if (msg) el.classList.add(kind || "info");
+}
+
 function openChat(sessionId, title) {
   cdtCurrentSession = sessionId;
   setLevel("chat");
   $("cdtTitle").textContent = title;
   $("cdtMessages").innerHTML = '<div class="empty">Loading…</div>';
-  $("cdtSendStatus").textContent = "";
+  setSendStatus("");
   sendRaw("CDT:messages:" + sessionId);
 }
 
@@ -969,22 +993,25 @@ function renderMessages(sessionId, items) {
 function updateComposerMode() {
   $("cdtInput").placeholder = "Reply in this chat…";
   if (cdtHasToken) {
-    $("cdtSendStatus").textContent = "";
+    setSendStatus("");
   } else {
-    // Free mode replies by driving the Conductor app via screen automation.
-    $("cdtSendStatus").textContent =
-      "Free mode: replies by controlling the Conductor app. Keep Conductor open "
-      + "with this chat visible in the sidebar.";
+    setSendStatus(
+      "Free mode: replies by controlling the Conductor app. Keep Conductor open.",
+      "info");
   }
 }
 
 function sendToChat() {
   const text = $("cdtInput").value.trim();
   if (!text || !cdtCurrentSession) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    setSendStatus("Not connected. Tap Connect to reconnect.", "err");
+    return;
+  }
   // The message can contain colons; the server splits only on the first two.
   sendRaw("CDT:send:" + cdtCurrentSession + ":" + text);
   $("cdtInput").value = "";
-  $("cdtSendStatus").textContent = cdtHasToken ? "Sending…" : "Driving Conductor…";
+  setSendStatus(cdtHasToken ? "Sending…" : "Driving Conductor…", "info");
 }
 
 // ---- New Task compose sheet ----
@@ -1039,19 +1066,21 @@ function handleConductor(obj) {
     return renderMessages(obj.session, obj.items || []);
   }
   if (obj.cdt === "sent") {
-    const text = obj.ok ? (obj.note || "Done ✓") : ("Failed: " + (obj.error || "unknown"));
     if (sheetOpen()) {                     // came from the New Task sheet
-      $("cdtCreateStatus").textContent = text;
+      $("cdtCreateStatus").textContent = obj.ok
+        ? (obj.note || "Done ✓") : ("Failed: " + (obj.error || "unknown"));
       if (obj.ok) setTimeout(() => { closeSheet(); if (cdtCurrentProject) setLevel("chats"); sendRaw("CDT:sessions"); }, 1300);
       return;
     }
-    if (!obj.ok) { $("cdtSendStatus").textContent = text; }
-    else if (obj.mode === "deeplink") {
-      $("cdtSendStatus").textContent = obj.note || "New task started ✓";
+    if (!obj.ok) {
+      setSendStatus(obj.error || "Send failed.", "err");   // prominent red
+    } else if (obj.mode === "deeplink") {
+      // fallback (or explicit new task): a new task was created
+      setSendStatus(obj.note || "New task started ✓", "ok");
       setTimeout(() => sendRaw("CDT:sessions"), 1500);
     } else {
       // api reply or free UI-automation reply → both land in this chat
-      $("cdtSendStatus").textContent = (obj.note ? obj.note + " " : "Sent ✓ ") + "(refreshing…)";
+      setSendStatus((obj.note ? obj.note + " " : "Sent ✓ ") + "(refreshing…)", "ok");
       if (cdtCurrentSession) {
         setTimeout(() => sendRaw("CDT:messages:" + cdtCurrentSession), 2000);
         setTimeout(() => sendRaw("CDT:messages:" + cdtCurrentSession), 6000);
@@ -1061,7 +1090,7 @@ function handleConductor(obj) {
   }
   if (obj.cdt === "error") {
     if (sheetOpen()) $("cdtCreateStatus").textContent = "Error: " + obj.error;
-    else $("cdtSendStatus").textContent = "Error: " + obj.error;
+    else setSendStatus(obj.error || "Something went wrong.", "err");
   }
 }
 

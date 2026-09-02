@@ -305,8 +305,20 @@ def new_task(prompt: str, repo_path: str | None = None) -> dict:
 
 
 def new_task_for_session(session_id: str, prompt: str) -> dict:
-    """Free send: start a new task in the same project as the given chat."""
-    return new_task(prompt, repo_path_for_session(session_id))
+    """Free send: start a new task in the same project as the given chat.
+
+    Refuses (returns an error) if the project's git repo is missing on disk,
+    rather than creating a workspace in the wrong place.
+    """
+    repo_path = repo_path_for_session(session_id)
+    if not repo_path:
+        return {"ok": False, "mode": "deeplink",
+                "error": "Couldn't determine this chat's project repo."}
+    if not os.path.isdir(repo_path):
+        return {"ok": False, "mode": "deeplink", "repo_missing": True,
+                "error": f"Project repo is missing on disk ({repo_path}); "
+                         "not creating a new workspace."}
+    return new_task(prompt, repo_path)
 
 
 def send_message(session_id: str, text: str) -> dict:
