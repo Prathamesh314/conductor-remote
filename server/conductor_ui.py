@@ -12,15 +12,23 @@ accessibility API, so we navigate by reading the screen. It needs:
 both granted to whatever app runs this (Terminal / iTerm / the server).
 
 Self-test on the Mac (see what it detects, without sending anything):
+    python3 conductor_ui.py where                      # hover to read x,y of an icon
     python3 conductor_ui.py ocr                        # dump everything OCR sees
     python3 conductor_ui.py find "istanbul"            # show the sidebar match
-    python3 conductor_ui.py tap  "Filter"              # click a control (e.g. Filter)
     python3 conductor_ui.py filter "vagent-backend-py" "istanbul" "your message"
     python3 conductor_ui.py send "istanbul" "your message" "vagent-backend-py"
 
-Navigation (env CONDUCTOR_NAV_MODE): "filter" (default) clicks Filter, picks
-the project, finds the chat in the short list, sends, then clears the filter;
-"scroll" scrolls the whole sidebar. Filter falls back to scroll automatically.
+Filter navigation (default): clicks the filter ICON, picks the project so all its
+chats show, clicks the chat, sends, then clears the filter — it NEVER clicks a
+project header (that would collapse an already-open project). The filter icon has
+no text, so set its position once:
+
+    python3 conductor_ui.py where     # hover over the funnel icon, read x,y
+    # then in .env:
+    CONDUCTOR_FILTER_ICON_XY=0.1362,0.2352   # the funnel/filter icon
+
+Without CONDUCTOR_FILTER_ICON_XY it falls back to plain scrolling (also without
+clicking any project header).
 """
 
 from __future__ import annotations
@@ -42,13 +50,16 @@ SIDEBAR_MAX_X = float(os.environ.get("CONDUCTOR_SIDEBAR_MAX_X", "0.40"))
 SIDEBAR_SCROLL_X = float(os.environ.get("CONDUCTOR_SIDEBAR_X", "0.12"))
 # Max scroll steps when hunting for an off-screen chat.
 MAX_SCROLLS = int(os.environ.get("CONDUCTOR_MAX_SCROLLS", "12"))
-# Click the project header first (helps when its group is collapsed).
-CLICK_PROJECT_FIRST = os.environ.get("CONDUCTOR_CLICK_PROJECT_FIRST", "1").strip().lower() not in ("0", "false", "no")
-# Navigation strategy: "filter" (use Conductor's Filter → pick project → search,
-# then clear) or "scroll" (scroll the whole sidebar). Filter falls back to scroll.
+# Navigation strategy: "filter" (click the filter icon → pick project → the
+# chats show → click chat → clear filter) or "scroll" (just scroll the sidebar).
+# Filter needs the icon coordinate below; it degrades to scroll if unset.
 NAV_MODE = os.environ.get("CONDUCTOR_NAV_MODE", "filter").strip().lower()
-FILTER_LABEL = os.environ.get("CONDUCTOR_FILTER_LABEL", "Filter")
-CLEAR_LABEL = os.environ.get("CONDUCTOR_CLEAR_LABEL", "Clear")
+# The filter (funnel) icon is an icon, not text, so OCR can't find it — give its
+# position as "x,y" fractions of the screen (use: conductor_ui.py where).
+FILTER_ICON_XY = os.environ.get("CONDUCTOR_FILTER_ICON_XY", "").strip()
+# The filter panel has a "Repo" row (default value "All repos") — clicking it
+# opens the project list. These labels are OCR text and rarely need changing.
+REPO_ALL_LABEL = os.environ.get("CONDUCTOR_REPO_ALL_LABEL", "All repos")
 # Optional composer click point "x,y" normalized (0..1) if auto-focus fails.
 COMPOSER_XY = os.environ.get("CONDUCTOR_COMPOSER_XY", "").strip()
 SUBMIT_KEY = os.environ.get("CONDUCTOR_SUBMIT_KEY", "enter").strip().lower()
@@ -229,43 +240,77 @@ def type_and_send(text: str) -> None:
         pg.press("enter")
 
 
-def _clear_filter(project: str | None) -> None:
-    """Best-effort: reopen Filter and clear it (or toggle the project off)."""
+def _click_xy_env(value: str) -> bool:
+    """Click a normalized "x,y" screen point from config. Returns False if unset."""
+    if not value:
+        return False
     try:
-        if _tap([FILTER_LABEL]):
-            time.sleep(0.3)
-            if not _tap([CLEAR_LABEL]) and project:
-                _tap([project])          # toggle the project selection off
+        nx, ny = (float(v) for v in value.split(","))
+        click_norm(nx, ny)
+        time.sleep(0.4)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _clear_filter(project: str | None) -> None:
+    """Reset the Repo filter back to 'All repos'."""
+    try:
+        if not _click_xy_env(FILTER_ICON_XY):   # open the filter panel
+            return
+        time.sleep(0.4)
+        # The Repo dropdown now shows the project name; open it and pick All repos.
+        if project:
+            _tap([project])
+            time.sleep(0.4)
+        _tap([REPO_ALL_LABEL])
+        time.sleep(0.3)
+        _click_xy_env(FILTER_ICON_XY)           # close the panel
     except Exception:  # noqa: BLE001
         pass
 
 
 def _open_chat_via_filter(project: str, chat_terms: list[str], text: str) -> dict:
-    """Filter → pick project → find chat (short list) → send → clear filter."""
-    if not _tap([FILTER_LABEL]):
-        return {"ok": False, "error": f"filter control '{FILTER_LABEL}' not visible"}
-    time.sleep(0.4)
-    _tap([project])                      # select the project (ok if not found)
+    """filter icon → Repo dropdown → pick project → chats show → click chat →
+    type + send → reset the filter. Never clicks a project header."""
+    if not _click_xy_env(FILTER_ICON_XY):
+        return {"ok": False, "error": "filter icon position not configured "
+                "(set CONDUCTOR_FILTER_ICON_XY)"}
     time.sleep(0.5)
+    # Open the Repo dropdown (shows "All repos" by default).
+    if not _tap([REPO_ALL_LABEL]):
+        _click_xy_env(FILTER_ICON_XY)           # close panel
+        return {"ok": False, "error": f"Repo dropdown ('{REPO_ALL_LABEL}') not found"}
+    time.sleep(0.5)
+    # Pick the project from the repo list.
+    if not _tap([project]):
+        _click_xy_env(FILTER_ICON_XY)
+        return {"ok": False, "error": f"project '{project}' not in the repo list"}
+    time.sleep(0.5)
+    _click_xy_env(FILTER_ICON_XY)               # close the panel so chats show
+    time.sleep(0.5)
+    # Now only this project's chats are listed — find + click the chat.
     target = scroll_find(chat_terms, click=True)
     if not target:
         _clear_filter(project)
         return {"ok": False, "error": "chat not found after filtering to project"}
+    time.sleep(0.4)
     type_and_send(text)
     time.sleep(0.3)
     _clear_filter(project)
     return {"ok": True, "mode": "uiauto-filter",
-            "note": f"Filtered to {project}, sent to '{target.get('text', chat_terms[0])}'."}
+            "note": f"Filtered to {project}, replied in '{target.get('text', chat_terms[0])}'."}
 
 
-def _open_chat_via_scroll(project: str | None, chat_terms: list[str], text: str) -> dict:
-    if CLICK_PROJECT_FIRST and project:
-        scroll_find([project], click=True)
+def _open_chat_via_scroll(chat_terms: list[str], text: str) -> dict:
+    """Scroll the sidebar to the chat and click it — WITHOUT clicking any
+    project header (clicking a project toggles it collapsed)."""
     target = scroll_find(chat_terms, click=True)
     if not target:
         tried = ", ".join(repr(c) for c in chat_terms)
         return {"ok": False, "error": "Couldn't find the chat in Conductor's "
-                f"sidebar (looked for {tried}). Is it archived/hidden?"}
+                f"sidebar (looked for {tried}). Make sure its project is expanded, "
+                "or set CONDUCTOR_FILTER_ICON_XY to use the filter."}
     type_and_send(text)
     return {"ok": True, "mode": "uiauto",
             "note": f"Opened '{target.get('text', chat_terms[0])}' and sent."}
@@ -276,7 +321,6 @@ def open_chat_and_send(nav, text: str) -> dict:
 
     `nav` may be a dict from conductor.session_nav_info()
     ({project, workspace_terms, session_terms}), or a str/list of names.
-    Uses the Filter flow when a project is known (falls back to scrolling).
     """
     if isinstance(nav, str):
         nav = {"workspace_terms": [nav]}
@@ -291,12 +335,13 @@ def open_chat_and_send(nav, text: str) -> dict:
     try:
         activate_conductor()
         time.sleep(0.7)
-        if NAV_MODE == "filter" and project:
+        # Use the filter flow only if we know the project AND have the icon coord.
+        if NAV_MODE == "filter" and project and FILTER_ICON_XY:
             result = _open_chat_via_filter(project, chat_terms, text)
             if result["ok"]:
                 return result
-            # Filter flow failed (control not found, etc.) → fall back to scroll.
-        return _open_chat_via_scroll(project, chat_terms, text)
+            # fall through to scrolling
+        return _open_chat_via_scroll(chat_terms, text)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": str(exc)}
 
@@ -307,7 +352,20 @@ def _main(argv: list[str]) -> None:
         print(__doc__)
         return
     cmd = argv[0]
-    if cmd == "ocr":
+    if cmd == "where":
+        # Hover over a target (filter icon, the ✕) to read its x,y fraction.
+        pg = _lazy_pyautogui()
+        w, h = pg.size()
+        print("Hover over the target; Ctrl-C to stop.")
+        print("Put the printed x,y into CONDUCTOR_FILTER_ICON_XY.")
+        try:
+            while True:
+                x, y = pg.position()
+                print(f"  {x / w:.4f},{y / h:.4f}   (px {x},{y})   ", end="\r", flush=True)
+                time.sleep(0.1)
+        except KeyboardInterrupt:
+            print()
+    elif cmd == "ocr":
         for it in screen_ocr():
             print(f'{it["x"]:.3f},{it["y"]:.3f}  {it["text"]!r}')
     elif cmd == "find" and len(argv) > 1:
