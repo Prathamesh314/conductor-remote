@@ -12,10 +12,15 @@ accessibility API, so we navigate by reading the screen. It needs:
 both granted to whatever app runs this (Terminal / iTerm / the server).
 
 Self-test on the Mac (see what it detects, without sending anything):
-    python3 conductor_ui.py ocr                 # dump everything OCR sees
-    python3 conductor_ui.py find "Chat Title"   # show the match + where it'd click
-    python3 conductor_ui.py click "Chat Title"  # actually click that chat
-    python3 conductor_ui.py send "Chat Title" "your message here"
+    python3 conductor_ui.py ocr                        # dump everything OCR sees
+    python3 conductor_ui.py find "istanbul"            # show the sidebar match
+    python3 conductor_ui.py tap  "Filter"              # click a control (e.g. Filter)
+    python3 conductor_ui.py filter "vagent-backend-py" "istanbul" "your message"
+    python3 conductor_ui.py send "istanbul" "your message" "vagent-backend-py"
+
+Navigation (env CONDUCTOR_NAV_MODE): "filter" (default) clicks Filter, picks
+the project, finds the chat in the short list, sends, then clears the filter;
+"scroll" scrolls the whole sidebar. Filter falls back to scroll automatically.
 """
 
 from __future__ import annotations
@@ -39,6 +44,11 @@ SIDEBAR_SCROLL_X = float(os.environ.get("CONDUCTOR_SIDEBAR_X", "0.12"))
 MAX_SCROLLS = int(os.environ.get("CONDUCTOR_MAX_SCROLLS", "12"))
 # Click the project header first (helps when its group is collapsed).
 CLICK_PROJECT_FIRST = os.environ.get("CONDUCTOR_CLICK_PROJECT_FIRST", "1").strip().lower() not in ("0", "false", "no")
+# Navigation strategy: "filter" (use Conductor's Filter → pick project → search,
+# then clear) or "scroll" (scroll the whole sidebar). Filter falls back to scroll.
+NAV_MODE = os.environ.get("CONDUCTOR_NAV_MODE", "filter").strip().lower()
+FILTER_LABEL = os.environ.get("CONDUCTOR_FILTER_LABEL", "Filter")
+CLEAR_LABEL = os.environ.get("CONDUCTOR_CLEAR_LABEL", "Clear")
 # Optional composer click point "x,y" normalized (0..1) if auto-focus fails.
 COMPOSER_XY = os.environ.get("CONDUCTOR_COMPOSER_XY", "").strip()
 SUBMIT_KEY = os.environ.get("CONDUCTOR_SUBMIT_KEY", "enter").strip().lower()
@@ -132,6 +142,42 @@ def click_norm(nx: float, ny: float) -> None:
     pg.click(int(nx * w), int(ny * h))
 
 
+def find_text(candidates, items: list[dict], max_x: float = 1.0) -> dict | None:
+    """Like find_target but searches the whole screen (any x) — for controls
+    such as the Filter icon or a project name in a filter popover."""
+    if isinstance(candidates, str):
+        candidates = [candidates]
+    best, best_score = None, 0.0
+    for title in candidates:
+        want = _norm(title)
+        if not want:
+            continue
+        for it in items:
+            if it["x"] > max_x:
+                continue
+            got = _norm(it.get("text", ""))
+            if not got:
+                continue
+            if got == want:
+                score = 1.0
+            elif want in got or got in want:
+                score = 0.75 * min(len(got), len(want)) / max(len(got), len(want))
+            else:
+                continue
+            if score > best_score:
+                best, best_score = it, score
+    return best
+
+
+def _tap(candidates, max_x: float = 1.0) -> dict | None:
+    """OCR the screen and click the best match for `candidates`, if found."""
+    it = find_text(candidates, screen_ocr(), max_x)
+    if it:
+        click_norm(it["x"], it["y"])
+        time.sleep(0.5)
+    return it
+
+
 def _scroll(amount: int) -> None:
     """Scroll the sidebar (positive = up, negative = down)."""
     pg = _lazy_pyautogui()
@@ -183,13 +229,54 @@ def type_and_send(text: str) -> None:
         pg.press("enter")
 
 
-def open_chat_and_send(nav, text: str) -> dict:
-    """Activate Conductor, scroll the sidebar to the chat, click it, type + send.
+def _clear_filter(project: str | None) -> None:
+    """Best-effort: reopen Filter and clear it (or toggle the project off)."""
+    try:
+        if _tap([FILTER_LABEL]):
+            time.sleep(0.3)
+            if not _tap([CLEAR_LABEL]) and project:
+                _tap([project])          # toggle the project selection off
+    except Exception:  # noqa: BLE001
+        pass
 
-    `nav` may be:
-      * a dict from conductor.session_nav_info(): {project, workspace_terms,
-        session_terms, ...} — the robust path (scrolls to find it), or
-      * a str / list of candidate names (legacy).
+
+def _open_chat_via_filter(project: str, chat_terms: list[str], text: str) -> dict:
+    """Filter → pick project → find chat (short list) → send → clear filter."""
+    if not _tap([FILTER_LABEL]):
+        return {"ok": False, "error": f"filter control '{FILTER_LABEL}' not visible"}
+    time.sleep(0.4)
+    _tap([project])                      # select the project (ok if not found)
+    time.sleep(0.5)
+    target = scroll_find(chat_terms, click=True)
+    if not target:
+        _clear_filter(project)
+        return {"ok": False, "error": "chat not found after filtering to project"}
+    type_and_send(text)
+    time.sleep(0.3)
+    _clear_filter(project)
+    return {"ok": True, "mode": "uiauto-filter",
+            "note": f"Filtered to {project}, sent to '{target.get('text', chat_terms[0])}'."}
+
+
+def _open_chat_via_scroll(project: str | None, chat_terms: list[str], text: str) -> dict:
+    if CLICK_PROJECT_FIRST and project:
+        scroll_find([project], click=True)
+    target = scroll_find(chat_terms, click=True)
+    if not target:
+        tried = ", ".join(repr(c) for c in chat_terms)
+        return {"ok": False, "error": "Couldn't find the chat in Conductor's "
+                f"sidebar (looked for {tried}). Is it archived/hidden?"}
+    type_and_send(text)
+    return {"ok": True, "mode": "uiauto",
+            "note": f"Opened '{target.get('text', chat_terms[0])}' and sent."}
+
+
+def open_chat_and_send(nav, text: str) -> dict:
+    """Activate Conductor, navigate to the chat, type + send.
+
+    `nav` may be a dict from conductor.session_nav_info()
+    ({project, workspace_terms, session_terms}), or a str/list of names.
+    Uses the Filter flow when a project is known (falls back to scrolling).
     """
     if isinstance(nav, str):
         nav = {"workspace_terms": [nav]}
@@ -204,22 +291,12 @@ def open_chat_and_send(nav, text: str) -> dict:
     try:
         activate_conductor()
         time.sleep(0.7)
-
-        # 1) Make sure the chat's project group is expanded/visible.
-        if CLICK_PROJECT_FIRST and project:
-            scroll_find([project], click=True)
-
-        # 2) Scroll-find the chat/workspace and click it.
-        target = scroll_find(chat_terms, click=True)
-        if not target:
-            tried = ", ".join(repr(c) for c in chat_terms)
-            return {"ok": False, "error": "Couldn't find the chat in Conductor's "
-                    f"sidebar (looked for {tried}). Is it archived/hidden?"}
-
-        # 3) Type into the composer and send.
-        type_and_send(text)
-        return {"ok": True, "mode": "uiauto",
-                "note": f"Opened '{target.get('text', chat_terms[0])}' and sent."}
+        if NAV_MODE == "filter" and project:
+            result = _open_chat_via_filter(project, chat_terms, text)
+            if result["ok"]:
+                return result
+            # Filter flow failed (control not found, etc.) → fall back to scroll.
+        return _open_chat_via_scroll(project, chat_terms, text)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": str(exc)}
 
@@ -242,8 +319,19 @@ def _main(argv: list[str]) -> None:
         t = find_target(argv[1], screen_ocr())
         if not t: print("not found"); return
         print("clicking", t["text"]); click_norm(t["x"], t["y"])
+    elif cmd == "tap" and len(argv) > 1:
+        # test clicking a control anywhere on screen (e.g. the Filter icon)
+        activate_conductor(); time.sleep(0.7)
+        t = _tap([argv[1]])
+        print("tapped", t["text"] if t else "NONE FOUND")
+    elif cmd == "filter" and len(argv) > 3:
+        # test the full filter flow: filter <project> <chat> <message>
+        activate_conductor(); time.sleep(0.7)
+        print(_open_chat_via_filter(argv[1], [argv[2]], argv[3]))
     elif cmd == "send" and len(argv) > 2:
-        print(open_chat_and_send(argv[1], argv[2]))
+        # send <chat-or-nav> <message>; add a 3rd arg to set project for filter
+        nav = {"project": argv[3], "workspace_terms": [argv[1]]} if len(argv) > 3 else argv[1]
+        print(open_chat_and_send(nav, argv[2]))
     else:
         print(__doc__)
 
