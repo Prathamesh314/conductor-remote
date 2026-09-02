@@ -169,9 +169,8 @@ def _extract_text(raw: str) -> str:
         t = block.get("type")
         if t == "text":
             parts.append(block.get("text", ""))
-        elif t == "tool_use":
-            parts.append(f"› {block.get('name', 'tool')}")
-        # tool_result / thinking are omitted to keep the transcript readable
+        # tool_use / tool_result / thinking are omitted: the phone transcript
+        # shows only the agent's actual replies, not Bash/Edit/Read tool calls.
     return "\n".join(p for p in parts if p).strip()
 
 

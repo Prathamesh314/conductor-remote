@@ -71,20 +71,21 @@
 
   /* ---------------- Conductor ---------------- */
   #conductorView {
-    --cdt-bg: #f7f4ee;
-    --cdt-ink: #201d1a;
-    --cdt-muted: #77716a;
-    --cdt-card: rgba(255, 255, 255, .82);
-    --cdt-card-solid: #fffaf4;
-    --cdt-line: rgba(58, 49, 42, .12);
-    --cdt-primary: #156f70;
-    --cdt-primary-2: #0f8b7f;
-    --cdt-warm: #d96d4b;
-    --cdt-good: #23836f;
-    --cdt-shadow: 0 16px 38px rgba(46, 37, 29, .12);
-    background:
-      linear-gradient(145deg, rgba(255, 236, 210, .72), rgba(217, 245, 238, .56) 48%, rgba(247, 244, 238, 0) 72%),
-      var(--cdt-bg);
+    --cdt-bg: #0b141a;            /* app background (WhatsApp dark) */
+    --cdt-panel: #111b21;         /* header / input bar / sheets */
+    --cdt-ink: #e9edef;           /* primary text */
+    --cdt-muted: #8696a0;         /* secondary text */
+    --cdt-card: #182229;          /* list rows (GitHub-ish card) */
+    --cdt-card-solid: #202c33;    /* received bubble */
+    --cdt-recv: #202c33;
+    --cdt-sent: #005c4b;          /* sent bubble (WhatsApp green) */
+    --cdt-line: rgba(233, 237, 239, .10);
+    --cdt-primary: #00a884;       /* accent */
+    --cdt-primary-2: #008f72;
+    --cdt-warm: #f15c6d;
+    --cdt-good: #25d366;          /* online / unread green */
+    --cdt-shadow: 0 16px 38px rgba(0, 0, 0, .45);
+    background: var(--cdt-bg);
     color: var(--cdt-ink);
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
     letter-spacing: 0;
@@ -574,6 +575,69 @@
     color: var(--cdt-muted) !important;
     font-family: inherit;
   }
+  /* ---- Dark theme (WhatsApp × GitHub Mobile) overrides ---- */
+  #conductorView header { background: var(--cdt-panel); backdrop-filter: none; -webkit-backdrop-filter: none; }
+  #conductorView header button,
+  #conductorView .inputbar button,
+  .sheet .actions button {
+    background: rgba(255, 255, 255, .06);
+    box-shadow: none;
+  }
+  #conductorView .prominent {
+    background: var(--cdt-primary) !important;
+    box-shadow: 0 8px 20px rgba(0, 168, 132, .3);
+  }
+  /* List rows: GitHub-style dark cards with circular WhatsApp avatars */
+  .card { background: var(--cdt-card); box-shadow: none; }
+  .card:hover, .card:active { background: #1d2a33; }
+  .avatar { border-radius: 50%; box-shadow: none; }
+  .chev { background: rgba(255, 255, 255, .05); color: var(--cdt-muted); }
+  .badge { background: rgba(255, 255, 255, .06); color: var(--cdt-muted); }
+  .badge.working {
+    color: var(--cdt-good);
+    border-color: rgba(37, 211, 102, .3);
+    background: rgba(37, 211, 102, .12);
+  }
+  .badge.unread { background: var(--cdt-good); color: #04231d; border-color: transparent; }
+  .empty { background: rgba(255, 255, 255, .03); }
+  .cdt-offline { background: rgba(255, 255, 255, .05); box-shadow: none; }
+  /* Chat bubbles: WhatsApp green (sent) / grey (received) */
+  #cdtMessages { background: var(--cdt-bg); }
+  .row-user .bubble2 { background: var(--cdt-sent); color: #e9edef; box-shadow: none; }
+  .row-agent .bubble2 { background: var(--cdt-recv); border-color: transparent; box-shadow: none; }
+  .bubble2 code { background: rgba(255, 255, 255, .12); }
+  .bubble2 pre { background: #0b141a; }
+  .bubble2 a, .row-agent .bubble2 a { color: #53bdeb; }
+  /* Composer + sheets */
+  #conductorView .inputbar { background: var(--cdt-panel); backdrop-filter: none; -webkit-backdrop-filter: none; }
+  #conductorView .inputbar input { background: rgba(255, 255, 255, .06); border-color: var(--cdt-line); }
+  .sheet-bg { background: rgba(0, 0, 0, .55); }
+  .sheet { background: var(--cdt-panel); border-top-color: var(--cdt-line); }
+  .chip { background: rgba(255, 255, 255, .06); }
+  .chip.sel { background: rgba(0, 168, 132, .16); border-color: rgba(0, 168, 132, .45); color: var(--cdt-good); }
+  .sheet textarea { background: rgba(255, 255, 255, .06); box-shadow: none; }
+  .sheet textarea:focus,
+  #conductorView .inputbar input:focus {
+    border-color: rgba(0, 168, 132, .5);
+    box-shadow: 0 0 0 3px rgba(0, 168, 132, .15);
+  }
+  /* Status colors must beat the muted !important base rule */
+  #cdtSendStatus.ok { color: var(--cdt-good) !important; }
+  #cdtSendStatus.err { color: #fff !important; }
+
+  /* "thinking" / typing indicator (shown until the agent replies) */
+  .bubble2.typing { display: inline-flex; align-items: center; gap: 5px; padding: 14px 16px; }
+  .bubble2.typing span {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--cdt-muted);
+    animation: cdt-typing 1.2s infinite ease-in-out;
+  }
+  .bubble2.typing span:nth-child(2) { animation-delay: .18s; }
+  .bubble2.typing span:nth-child(3) { animation-delay: .36s; }
+  @keyframes cdt-typing {
+    0%, 60%, 100% { transform: translateY(0); opacity: .4; }
+    30% { transform: translateY(-4px); opacity: 1; }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .card, .fab, .bubble2, .sheet, .dot-pulse, .cdt-offline { animation: none; }
     #conductorView header button,
@@ -1021,6 +1085,7 @@ function setSendStatus(msg, kind) {
 }
 
 function openChat(sessionId, title) {
+  if (cdtPending && cdtPending.session !== sessionId) stopPoll();
   cdtCurrentSession = sessionId;
   setLevel("chat");
   $("cdtTitle").textContent = title;
@@ -1102,27 +1167,96 @@ function renderMarkdown(src) {
   return html || "<p></p>";
 }
 
+// --- Optimistic send + "thinking" indicator ---
+let cdtPending = null;   // {session, text, deadline, interval} while awaiting a reply
+let cdtPollTimer = null;  // the single in-flight poll timer (prevents request floods)
+
+// Stop any running reply-poll loop and clear the pending state.
+function stopPoll() {
+  if (cdtPollTimer) { clearTimeout(cdtPollTimer); cdtPollTimer = null; }
+  cdtPending = null;
+}
+
+function _msgRow(role, text) {
+  const isUser = role === "user";
+  const row = document.createElement("div");
+  row.className = isUser ? "row-user" : "row-agent";
+  row.innerHTML = '<div class="who2"></div><div class="bubble2"></div>';
+  row.querySelector(".who2").textContent = isUser ? "You" : "Agent";
+  const bubble = row.querySelector(".bubble2");
+  if (isUser) { bubble.classList.add("plain"); bubble.textContent = text; }
+  else { bubble.innerHTML = renderMarkdown(text); }
+  return row;
+}
+
+function _thinkingRow() {
+  const row = document.createElement("div");
+  row.className = "row-agent";
+  row.innerHTML = '<div class="who2">Agent</div>'
+    + '<div class="bubble2 typing"><span></span><span></span><span></span></div>';
+  return row;
+}
+
+// True once an assistant message appears AFTER our just-sent user message.
+function _agentRepliedSince(items, text) {
+  const want = (text || "").trim();
+  let idx = -1;
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (items[i].role === "user" && (items[i].text || "").trim() === want) { idx = i; break; }
+  }
+  if (idx === -1) return false;                      // our message not saved yet
+  for (let j = idx + 1; j < items.length; j++) {
+    if (items[j].role === "assistant" && (items[j].text || "").trim()) return true;
+  }
+  return false;
+}
+
+// Poll the transcript until the agent replies (or we time out). Backs off so a
+// slow reply doesn't hammer the server, and is a singleton: only ever one timer
+// is scheduled, so overlapping sends can't spawn parallel poll loops.
+function pollReply() {
+  cdtPollTimer = null;
+  if (!cdtPending || cdtPending.session !== cdtCurrentSession) return;
+  if (Date.now() > cdtPending.deadline) {
+    cdtPending = null;
+    sendRaw("CDT:messages:" + cdtCurrentSession);   // one final re-render, no dots
+    return;
+  }
+  sendRaw("CDT:messages:" + cdtPending.session);
+  // Grow the gap (3s → 4.5s → … capped at 12s) so long waits stay cheap.
+  cdtPending.interval = Math.min((cdtPending.interval || 3000) * 1.5, 12000);
+  cdtPollTimer = setTimeout(pollReply, cdtPending.interval);
+}
+
+// Start a fresh poll loop, replacing any that's already running.
+function startPoll() {
+  if (cdtPollTimer) { clearTimeout(cdtPollTimer); cdtPollTimer = null; }
+  pollReply();
+}
+
 function renderMessages(sessionId, items) {
   if (sessionId !== cdtCurrentSession) return;
   const box = $("cdtMessages");
-  if (!items.length) { box.innerHTML = '<div class="empty">No messages yet.</div>'; return; }
+  const awaiting = cdtPending && cdtPending.session === sessionId;
+
+  if (!items.length && !awaiting) {
+    box.innerHTML = '<div class="empty">No messages yet.</div>';
+    return;
+  }
   box.innerHTML = "";
-  for (const m of items) {
-    const isUser = m.role === "user";
-    const row = document.createElement("div");
-    row.className = isUser ? "row-user" : "row-agent";
-    row.innerHTML = '<div class="who2"></div><div class="bubble2"></div>';
-    row.querySelector(".who2").textContent = isUser ? "You" : "Agent";
-    const bubble = row.querySelector(".bubble2");
-    if (isUser) {
-      // Your own messages are plain text — keep them literal, preserve breaks.
-      bubble.classList.add("plain");
-      bubble.textContent = m.text;
+  for (const m of items) box.appendChild(_msgRow(m.role, m.text));
+
+  if (awaiting) {
+    if (_agentRepliedSince(items, cdtPending.text)) {
+      stopPoll();                                     // reply arrived → stop polling
     } else {
-      // Agent replies are Markdown — render them so they read cleanly.
-      bubble.innerHTML = renderMarkdown(m.text);
+      // Keep my message visible even before the server has stored it.
+      const lastUser = [...items].reverse().find((m) => m.role === "user");
+      if (!lastUser || (lastUser.text || "").trim() !== cdtPending.text.trim()) {
+        box.appendChild(_msgRow("user", cdtPending.text));
+      }
+      box.appendChild(_thinkingRow());
     }
-    box.appendChild(row);
   }
   box.scrollTop = box.scrollHeight;
 }
@@ -1145,10 +1279,21 @@ function sendToChat() {
     setSendStatus("Not connected. Tap Connect to reconnect.", "err");
     return;
   }
+  // Ignore an accidental double-fire (button tap + Enter) of the same message
+  // while one is still awaiting a reply — otherwise the server gets it twice.
+  if (cdtPending && cdtPending.session === cdtCurrentSession && cdtPending.text === text) return;
+  stopPoll();   // cancel any prior poll loop so we never run two at once
   // The message can contain colons; the server splits only on the first two.
   sendRaw("CDT:send:" + cdtCurrentSession + ":" + text);
   $("cdtInput").value = "";
-  setSendStatus(cdtHasToken ? "Sending…" : "Driving Conductor…", "info");
+  // Optimistic UI: show my message + a thinking indicator immediately.
+  const box = $("cdtMessages");
+  if (box.querySelector(".empty")) box.innerHTML = "";
+  box.appendChild(_msgRow("user", text));
+  box.appendChild(_thinkingRow());
+  box.scrollTop = box.scrollHeight;
+  cdtPending = { session: cdtCurrentSession, text, deadline: Date.now() + 90000, interval: 3000 };
+  setSendStatus("");
 }
 
 // ---- New Task compose sheet ----
@@ -1210,18 +1355,20 @@ function handleConductor(obj) {
       return;
     }
     if (!obj.ok) {
-      setSendStatus(obj.error || "Send failed.", "err");   // prominent red
+      stopPoll();                                        // stop the thinking dots
+      if (cdtCurrentSession) sendRaw("CDT:messages:" + cdtCurrentSession);
+      setSendStatus(obj.error || "Send failed.", "err"); // prominent red
     } else if (obj.mode === "deeplink") {
-      // fallback (or explicit new task): a new task was created
+      // fallback (or explicit new task): reply went to a NEW task, not here
+      stopPoll();
+      if (cdtCurrentSession) sendRaw("CDT:messages:" + cdtCurrentSession);
       setSendStatus(obj.note || "New task started ✓", "ok");
       setTimeout(() => sendRaw("CDT:sessions"), 1500);
     } else {
-      // api reply or free UI-automation reply → both land in this chat
-      setSendStatus((obj.note ? obj.note + " " : "Sent ✓ ") + "(refreshing…)", "ok");
-      if (cdtCurrentSession) {
-        setTimeout(() => sendRaw("CDT:messages:" + cdtCurrentSession), 2000);
-        setTimeout(() => sendRaw("CDT:messages:" + cdtCurrentSession), 6000);
-      }
+      // api / UI-automation reply lands in this chat → poll until it appears,
+      // keeping the thinking indicator until then.
+      setSendStatus("");
+      startPoll();
     }
     return;
   }
@@ -1234,7 +1381,7 @@ function handleConductor(obj) {
 // Wiring
 $("conductorBtn").onclick = openConductor;
 $("cdtBack").onclick = () => {
-  if (cdtLevel === "chat") { cdtCurrentSession = null; setLevel("chats"); }
+  if (cdtLevel === "chat") { stopPoll(); cdtCurrentSession = null; setLevel("chats"); }
   else if (cdtLevel === "chats") { cdtCurrentProject = null; setLevel("projects"); }
   else showConductor(false);
 };
