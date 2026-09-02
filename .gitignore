@@ -19,3 +19,6 @@ DerivedData/
 *.xcodeproj/xcuserdata/
 xcuserdata/
 *.xcuserstate
+
+# compiled OCR helper
+server/.ocr_bin
