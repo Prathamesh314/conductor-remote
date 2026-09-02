@@ -2,6 +2,7 @@ import SwiftUI
 
 /// Start a fresh Conductor task: pick a project, write a prompt, send.
 struct NewTaskView: View {
+    var preselectedProjectId: String? = nil
     var onCreated: () async -> Void
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -97,7 +98,8 @@ struct NewTaskView: View {
     private func loadProjects() async {
         do {
             projects = try await model.fetchProjects()
-            selected = selected ?? projects.first
+            let preselected = preselectedProjectId.flatMap { id in projects.first { $0.id == id } }
+            selected = selected ?? preselected ?? projects.first
         } catch {
             self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }

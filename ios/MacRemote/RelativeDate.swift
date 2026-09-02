@@ -19,6 +19,9 @@ enum RelativeDate {
         return iso.date(from: raw)
     }
 
+    /// Parsed `Date` for sorting/comparison (nil when unparseable).
+    static func date(_ raw: String?) -> Date? { parse(raw) }
+
     static func string(_ raw: String?) -> String {
         guard let date = parse(raw) else { return "" }
         let secs = Date().timeIntervalSince(date)

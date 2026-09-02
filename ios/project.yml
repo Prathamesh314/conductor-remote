@@ -39,5 +39,8 @@ targets:
           - UIInterfaceOrientationPortrait
         NSLocalNetworkUsageDescription: "Connect to your Mac over your Tailnet to control Conductor."
         NSAppTransportSecurity:
-          NSAllowsLocalNetworking: true
+          # NSAllowsArbitraryLoads is ignored on iOS 10+ if NSAllowsLocalNetworking
+          # is also present, and NSAllowsLocalNetworking does NOT cover the Tailscale
+          # CGNAT range (100.64.0.0/10). Keep only NSAllowsArbitraryLoads so plain
+          # ws:// to the Tailnet IP is permitted.
           NSAllowsArbitraryLoads: true
