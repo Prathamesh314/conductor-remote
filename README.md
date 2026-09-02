@@ -64,16 +64,19 @@ Tailscale is ON - reachable from anywhere:
 AUTH CODE:  922031
 ```
 
+`start.py` also prints a ready-to-open **connect URL** with the auth code
+embedded in the hash, e.g. `http://100.x.x.x:8080/#922031` (it's also copied to
+the Mac clipboard). Open that URL on the phone and it auto-fills the code and
+connects — no scanning and no typing the code.
+
 On the phone:
 
 1. Install Tailscale and sign in with the same account as the Mac.
 2. Turn Tailscale on.
-3. Open the printed `http://100.x.x.x:8080` URL.
-4. Enter the auth code and tap Connect.
-5. Tap Conductor to browse projects, chats, and tasks.
-
-If `qrencode` is installed, `start.py` prints a QR code that includes the auth
-code in the URL hash so the web UI can auto-fill it.
+3. Open the printed connect URL (`http://100.x.x.x:8080/#<code>`) — it connects
+   automatically. (Or open `http://100.x.x.x:8080`, enter the auth code, and tap
+   Connect.)
+4. Tap Conductor to browse projects, chats, and tasks.
 
 ## Repository Layout
 
