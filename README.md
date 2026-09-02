@@ -52,7 +52,7 @@ starts everything. It prints a box like:
 
 ```
   Tailscale is ON — reachable from anywhere:
-    ->  http://100.71.35.121:8080
+    ->  http://100.x.x.x:8080
   AUTH CODE:  922031
 ```
 
