@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Mac Remote Terminal</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d;
+    --fg: #e6edf3; --muted: #8b949e; --accent: #2f81f7;
+    --green: #3fb950; --red: #f85149; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg); font-family: var(--mono);
+    display: flex; flex-direction: column; height: 100dvh;
+  }
+  header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px; background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  header .title { font-weight: 600; }
+  header .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--red); }
+  header .dot.on { background: var(--green); }
+  header .spacer { flex: 1; }
+  header button {
+    background: transparent; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 10px; font-family: var(--mono); cursor: pointer;
+  }
+  #screen {
+    flex: 1; overflow-y: auto; padding: 12px 14px; white-space: pre-wrap;
+    word-break: break-word; font-size: 13px; line-height: 1.5;
+  }
+  #screen .cmd { color: var(--accent); }
+  #screen .sys { color: var(--muted); }
+  #screen .err { color: var(--red); }
+  .inputbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px; background: var(--panel); border-top: 1px solid var(--border);
+  }
+  .inputbar .prompt { color: var(--green); }
+  .inputbar button {
+    background: transparent; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 9px; font-family: var(--mono); cursor: pointer;
+  }
+  header #awakeBtn.on { color: var(--green); border-color: var(--green); }
+  .inputbar input {
+    flex: 1; background: transparent; border: none; outline: none;
+    color: var(--fg); font-family: var(--mono); font-size: 14px;
+  }
+  .connect {
+    margin: auto; max-width: 340px; width: 100%; padding: 24px;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .connect h1 { font-size: 18px; margin: 0 0 6px; }
+  .connect input {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--fg); padding: 10px 12px; font-family: var(--mono); font-size: 15px;
+  }
+  .connect button {
+    background: var(--accent); color: #fff; border: none; border-radius: 8px;
+    padding: 11px; font-size: 15px; font-family: var(--mono); cursor: pointer;
+  }
+  .quickbar { display: flex; gap: 6px; padding: 8px 14px 0; flex-wrap: wrap; }
+  .quickbar button {
+    background: var(--panel); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 10px; font-family: var(--mono); font-size: 12px; cursor: pointer;
+  }
+  .hidden { display: none !important; }
+
+  /* Conductor */
+  header button.prominent, .inputbar button.prominent {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+  }
+  .cdt-item {
+    padding: 12px 14px; border-bottom: 1px solid var(--border); cursor: pointer;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .cdt-item:active { background: var(--panel); }
+  .cdt-item .body { flex: 1; min-width: 0; }
+  .cdt-item .t { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cdt-item .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .cdt-badge {
+    font-size: 10px; padding: 2px 7px; border-radius: 10px; white-space: nowrap;
+    border: 1px solid var(--border); color: var(--muted);
+  }
+  .cdt-badge.working { color: var(--green); border-color: var(--green); }
+  .cdt-badge.unread { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .cdt-proj { padding: 8px 14px 4px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  .msg { margin-bottom: 12px; }
+  .msg .who { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+  .msg .bubble { white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.45; }
+  .msg.user .bubble { color: var(--accent); }
+  .msg.assistant .bubble { color: var(--fg); }
+</style>
+</head>
+<body>
+
+<!-- Connect screen -->
+<div id="connectView" class="connect">
+  <h1>Mac Remote Terminal</h1>
+  <input id="host" placeholder="Mac IP (100.x.x.x or localhost)" autocapitalize="off" autocomplete="off" />
+  <input id="code" placeholder="Auth code from email" inputmode="numeric" />
+  <button id="connectBtn">Connect</button>
+  <div id="connectStatus" class="sys" style="font-size:12px;color:var(--muted)"></div>
+</div>
+
+<!-- Terminal screen -->
+<div id="termView" class="hidden" style="display:flex;flex-direction:column;height:100%">
+  <header>
+    <span class="dot" id="statusDot"></span>
+    <span class="title">Mac Remote</span>
+    <span class="spacer"></span>
+    <button id="conductorBtn">🎛 Conductor</button>
+    <button id="awakeBtn">☕ Awake: off</button>
+    <button id="disconnectBtn">Disconnect</button>
+  </header>
+  <div class="quickbar">
+    <button data-send="CMD:ls -la">ls -la</button>
+    <button data-send="CMD:pwd">pwd</button>
+    <button data-send="NEW_CHAT">New Chat</button>
+    <button data-send="clear">clear</button>
+  </div>
+  <div id="screen"></div>
+  <div class="inputbar">
+    <button id="histPrev" title="Previous command">▲</button>
+    <button id="histNext" title="Next command">▼</button>
+    <span class="prompt">$</span>
+    <input id="cmd" placeholder="type a command, e.g. ls -la" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" />
+  </div>
+</div>
+
+<!-- Conductor screen -->
+<div id="conductorView" class="hidden" style="display:flex;flex-direction:column;height:100%">
+  <header>
+    <button id="cdtBack">‹ Terminal</button>
+    <span class="title" id="cdtTitle">Conductor</span>
+    <span class="spacer"></span>
+    <button id="cdtRefresh">↻</button>
+  </header>
+
+  <!-- Chats list -->
+  <div id="cdtList" style="flex:1;overflow-y:auto"></div>
+
+  <!-- One chat -->
+  <div id="cdtChat" class="hidden" style="flex:1;display:flex;flex-direction:column;min-height:0">
+    <div id="cdtMessages" style="flex:1;overflow-y:auto;padding:12px 14px"></div>
+    <div class="inputbar">
+      <input id="cdtInput" placeholder="Message this chat…" autocapitalize="sentences" />
+      <button id="cdtSend" class="prominent">Send</button>
+    </div>
+    <div id="cdtSendStatus" class="sys" style="padding:0 14px 8px;font-size:12px;color:var(--muted)"></div>
+  </div>
+</div>
+
+<script>
+const PORT = 8765;
+let ws = null;
+let awakeState = false;
+const $ = (id) => document.getElementById(id);
+const screenEl = $("screen");
+
+// --- Command history (persisted across reloads) ---
+let history = [];
+try { history = JSON.parse(localStorage.getItem("mrt.history") || "[]"); } catch (e) {}
+let histIdx = history.length;   // points one past the last item = "new line"
+
+function pushHistory(line) {
+  if (history[history.length - 1] !== line) {
+    history.push(line);
+    if (history.length > 200) history = history.slice(-200);
+    localStorage.setItem("mrt.history", JSON.stringify(history));
+  }
+  histIdx = history.length;
+}
+
+function recall(delta) {
+  if (!history.length) return;
+  histIdx = Math.max(0, Math.min(history.length, histIdx + delta));
+  const val = histIdx >= history.length ? "" : history[histIdx];
+  const input = $("cmd");
+  input.value = val;
+  input.focus();
+  // put the caret at the end
+  requestAnimationFrame(() => input.setSelectionRange(val.length, val.length));
+}
+
+// Prefill host: whatever this page was served from (so on the phone you only
+// type the code), else the last-used host.
+const servedHost = location.hostname && location.hostname !== ""
+  ? location.hostname : "";
+$("host").value = servedHost || localStorage.getItem("mrt.host") || "";
+
+// Prefill the code: a code in the URL hash (from the scanned QR) wins;
+// otherwise reuse the last code that worked. Then, if we have both a host and
+// a code, auto-connect — so from anywhere you just open the page and you're in.
+// (The hash is client-side only and is never sent to a server.)
+let hashCode = location.hash.slice(1);
+if (hashCode.startsWith("code=")) hashCode = hashCode.slice(5);
+const initialCode = /^\d{4,8}$/.test(hashCode)
+  ? hashCode
+  : (localStorage.getItem("mrt.code") || "");
+if (initialCode) $("code").value = initialCode;
+if ($("host").value && initialCode) {
+  // Small delay so the socket/DOM are ready, then connect on its own.
+  setTimeout(() => connect(), 200);
+}
+
+function print(text, cls) {
+  const div = document.createElement("div");
+  if (cls) div.className = cls;
+  div.textContent = text;
+  screenEl.appendChild(div);
+  screenEl.scrollTop = screenEl.scrollHeight;
+}
+
+function setConnected(on) {
+  $("statusDot").classList.toggle("on", on);
+}
+
+function connect() {
+  const host = $("host").value.trim();
+  const code = $("code").value.trim();
+  if (!host || !code) { $("connectStatus").textContent = "Enter host and code."; return; }
+  localStorage.setItem("mrt.host", host);
+
+  $("connectStatus").textContent = "Connecting…";
+  try {
+    ws = new WebSocket(`ws://${host}:${PORT}`);
+  } catch (e) {
+    $("connectStatus").textContent = "Bad address: " + e.message;
+    return;
+  }
+
+  let authed = false;
+
+  ws.onopen = () => { ws.send(code); };
+  ws.onmessage = (ev) => {
+    const msg = ev.data;
+    if (!authed) {
+      if (msg === "AUTH_SUCCESS") {
+        authed = true;
+        $("connectView").classList.add("hidden");
+        $("termView").classList.remove("hidden");
+        setConnected(true);
+        localStorage.setItem("mrt.code", code);  // remember for next time
+        print("Authenticated. Connected to " + host, "sys");
+        $("cmd").focus();
+        ws.send("AWAKE_STATUS");   // sync the keep-awake toggle
+      } else if (msg === "AUTH_FAILED") {
+        $("connectStatus").textContent = "Wrong code — try again.";
+      } else if (msg === "AUTH_LOCKED") {
+        $("connectStatus").textContent = "Locked. Restart the Mac server.";
+      }
+      return;
+    }
+    if (msg === "AWAKE_ON" || msg === "AWAKE_OFF") {
+      setAwakeUI(msg === "AWAKE_ON");
+      return;
+    }
+    if (msg && msg.charAt(0) === "{") {
+      let obj = null;
+      try { obj = JSON.parse(msg); } catch (e) {}
+      if (obj && obj.cdt) { handleConductor(obj); return; }
+    }
+    print(msg);
+  };
+  ws.onerror = () => {
+    $("connectStatus").textContent = "Connection error. Check IP / server / ATS.";
+    setConnected(false);
+  };
+  ws.onclose = () => {
+    setConnected(false);
+    if (authed) print("— disconnected —", "sys");
+  };
+}
+
+function sendRaw(v) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(v);
+}
+
+function setAwakeUI(on) {
+  awakeState = on;
+  const b = $("awakeBtn");
+  b.textContent = on ? "☕ Awake: on" : "☕ Awake: off";
+  b.classList.toggle("on", on);
+}
+
+function send(raw) {
+  const line = raw.trim();
+  if (!line || !ws || ws.readyState !== WebSocket.OPEN) return;
+  pushHistory(line);
+  if (line === "clear") { screenEl.innerHTML = ""; return; }
+
+  const uiVerbs = ["NEW_CHAT", "NEXT_CHAT", "PREV_CHAT", "PWD"];
+  const isRaw = uiVerbs.includes(line) || line.startsWith("TYPE:") || line.startsWith("CMD:");
+  print("$ " + line, "cmd");
+  ws.send(isRaw ? line : "CMD:" + line);
+}
+
+// Wiring
+$("connectBtn").onclick = connect;
+$("code").addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
+$("disconnectBtn").onclick = () => { if (ws) ws.close(); location.reload(); };
+$("cmd").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    send($("cmd").value);
+    $("cmd").value = "";
+    histIdx = history.length;
+  } else if (e.key === "ArrowUp") {
+    recall(-1); e.preventDefault();
+  } else if (e.key === "ArrowDown") {
+    recall(1); e.preventDefault();
+  }
+});
+$("histPrev").onclick = () => recall(-1);
+$("histNext").onclick = () => recall(1);
+$("awakeBtn").onclick = () => sendRaw(awakeState ? "AWAKE_OFF" : "AWAKE_ON");
+
+// ---------------- Conductor browser ----------------
+let cdtCurrentSession = null;
+
+function showConductor(on) {
+  $("termView").classList.toggle("hidden", on);
+  $("conductorView").classList.toggle("hidden", !on);
+}
+
+function openConductor() {
+  showConductor(true);
+  showChatList();
+  loadSessions();
+}
+
+function showChatList() {
+  cdtCurrentSession = null;
+  $("cdtChat").classList.add("hidden");
+  $("cdtList").classList.remove("hidden");
+  $("cdtTitle").textContent = "Conductor";
+}
+
+function loadSessions() {
+  $("cdtList").innerHTML = '<div class="cdt-proj">Loading…</div>';
+  sendRaw("CDT:sessions");
+}
+
+function renderSessions(items) {
+  const list = $("cdtList");
+  list.innerHTML = "";
+  if (!items.length) { list.innerHTML = '<div class="cdt-proj">No chats found.</div>'; return; }
+  let lastProj = null;
+  for (const s of items) {
+    const proj = s.project || "—";
+    if (proj !== lastProj) {
+      const h = document.createElement("div");
+      h.className = "cdt-proj";
+      h.textContent = proj;
+      list.appendChild(h);
+      lastProj = proj;
+    }
+    const row = document.createElement("div");
+    row.className = "cdt-item";
+    const badge = s.status === "working"
+      ? '<span class="cdt-badge working">working</span>'
+      : (s.unread ? `<span class="cdt-badge unread">${s.unread}</span>`
+                  : `<span class="cdt-badge">${s.status || "idle"}</span>`);
+    const sub = [s.workspace_name || s.branch || "", s.model || ""].filter(Boolean).join(" · ");
+    row.innerHTML =
+      `<div class="body"><div class="t"></div><div class="sub"></div></div>${badge}`;
+    row.querySelector(".t").textContent = s.title || "Untitled";
+    row.querySelector(".sub").textContent = sub;
+    row.onclick = () => openChat(s.id, s.title || "Untitled");
+    list.appendChild(row);
+  }
+}
+
+function openChat(sessionId, title) {
+  cdtCurrentSession = sessionId;
+  $("cdtList").classList.add("hidden");
+  $("cdtChat").classList.remove("hidden");
+  $("cdtTitle").textContent = title;
+  $("cdtMessages").innerHTML = '<div class="cdt-proj">Loading…</div>';
+  $("cdtSendStatus").textContent = "";
+  sendRaw("CDT:messages:" + sessionId);
+}
+
+function renderMessages(sessionId, items) {
+  if (sessionId !== cdtCurrentSession) return;
+  const box = $("cdtMessages");
+  box.innerHTML = "";
+  if (!items.length) { box.innerHTML = '<div class="cdt-proj">No messages yet.</div>'; }
+  for (const m of items) {
+    const div = document.createElement("div");
+    div.className = "msg " + (m.role === "user" ? "user" : "assistant");
+    div.innerHTML = '<div class="who"></div><div class="bubble"></div>';
+    div.querySelector(".who").textContent = m.role === "user" ? "You" : "Agent";
+    div.querySelector(".bubble").textContent = m.text;
+    box.appendChild(div);
+  }
+  box.scrollTop = box.scrollHeight;
+}
+
+function sendToChat() {
+  const text = $("cdtInput").value.trim();
+  if (!text || !cdtCurrentSession) return;
+  // ":" is the delimiter, but the message can contain colons — the server
+  // splits only on the first two, so the rest is preserved.
+  sendRaw("CDT:send:" + cdtCurrentSession + ":" + text);
+  $("cdtInput").value = "";
+  $("cdtSendStatus").textContent = "Sending…";
+}
+
+function handleConductor(obj) {
+  if (obj.cdt === "sessions") return renderSessions(obj.items || []);
+  if (obj.cdt === "messages") return renderMessages(obj.session, obj.items || []);
+  if (obj.cdt === "sent") {
+    $("cdtSendStatus").textContent = obj.ok
+      ? "Sent ✓  (refreshing…)"
+      : "Failed: " + (obj.error || "unknown");
+    if (obj.ok && cdtCurrentSession) {
+      setTimeout(() => sendRaw("CDT:messages:" + cdtCurrentSession), 1500);
+    }
+    return;
+  }
+  if (obj.cdt === "error") { $("cdtSendStatus").textContent = "Error: " + obj.error; }
+}
+
+$("conductorBtn").onclick = openConductor;
+$("cdtBack").onclick = () => { if (cdtCurrentSession) showChatList(); else showConductor(false); };
+$("cdtRefresh").onclick = () => { cdtCurrentSession ? sendRaw("CDT:messages:" + cdtCurrentSession) : loadSessions(); };
+$("cdtSend").onclick = sendToChat;
+$("cdtInput").addEventListener("keydown", (e) => { if (e.key === "Enter") sendToChat(); });
+document.querySelectorAll(".quickbar button").forEach((b) => {
+  b.onclick = () => send(b.dataset.send);
+});
+</script>
+</body>
+</html>
