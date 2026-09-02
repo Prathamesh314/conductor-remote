@@ -69,30 +69,405 @@
   }
   .hidden { display: none !important; }
 
-  /* Conductor */
-  header button.prominent, .inputbar button.prominent {
-    background: var(--accent); color: #fff; border-color: var(--accent);
+  /* ---------------- Conductor ---------------- */
+  #conductorView {
+    --cdt-bg: #f7f4ee;
+    --cdt-ink: #201d1a;
+    --cdt-muted: #77716a;
+    --cdt-card: rgba(255, 255, 255, .82);
+    --cdt-card-solid: #fffaf4;
+    --cdt-line: rgba(58, 49, 42, .12);
+    --cdt-primary: #156f70;
+    --cdt-primary-2: #0f8b7f;
+    --cdt-warm: #d96d4b;
+    --cdt-good: #23836f;
+    --cdt-shadow: 0 16px 38px rgba(46, 37, 29, .12);
+    background:
+      linear-gradient(145deg, rgba(255, 236, 210, .72), rgba(217, 245, 238, .56) 48%, rgba(247, 244, 238, 0) 72%),
+      var(--cdt-bg);
+    color: var(--cdt-ink);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    letter-spacing: 0;
   }
-  .cdt-item {
-    padding: 12px 14px; border-bottom: 1px solid var(--border); cursor: pointer;
-    display: flex; align-items: center; gap: 10px;
+  #conductorView header {
+    min-height: 58px;
+    padding: calc(10px + env(safe-area-inset-top)) 14px 10px;
+    background: rgba(247, 244, 238, .82);
+    border-bottom: 1px solid var(--cdt-line);
+    color: var(--cdt-ink);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
   }
-  .cdt-item:active { background: var(--panel); }
-  .cdt-item .body { flex: 1; min-width: 0; }
-  .cdt-item .t { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .cdt-item .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
-  .cdt-badge {
-    font-size: 10px; padding: 2px 7px; border-radius: 10px; white-space: nowrap;
-    border: 1px solid var(--border); color: var(--muted);
+  #conductorView header .title {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 17px;
+    font-weight: 750;
   }
-  .cdt-badge.working { color: var(--green); border-color: var(--green); }
-  .cdt-badge.unread { background: var(--accent); color: #fff; border-color: var(--accent); }
-  .cdt-proj { padding: 8px 14px 4px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
-  .msg { margin-bottom: 12px; }
-  .msg .who { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
-  .msg .bubble { white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.45; }
-  .msg.user .bubble { color: var(--accent); }
-  .msg.assistant .bubble { color: var(--fg); }
+  #conductorView header button,
+  #conductorView .inputbar button,
+  .sheet .actions button {
+    min-height: 38px;
+    border: 1px solid var(--cdt-line);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .64);
+    color: var(--cdt-ink);
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 650;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, .6) inset;
+    transition: transform .18s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
+  }
+  #cdtBack {
+    max-width: 38vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0 12px;
+    flex: none;
+  }
+  #cdtRefresh {
+    width: 38px;
+    padding: 0;
+    flex: none;
+  }
+  #conductorView header button:active,
+  #conductorView .inputbar button:active,
+  .sheet .actions button:active,
+  .card:active,
+  .chip:active { transform: scale(.97); }
+  #conductorView .prominent {
+    background: linear-gradient(135deg, var(--cdt-primary), var(--cdt-primary-2)) !important;
+    color: #fff !important;
+    border-color: transparent !important;
+    box-shadow: 0 10px 24px rgba(21, 111, 112, .26);
+  }
+  .cdt-screen {
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .cdt-screen::-webkit-scrollbar { display: none; }
+  .cdt-scroll { padding: 12px 0 102px; }
+
+  .card {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 8px 12px;
+    padding: 14px;
+    min-height: 72px;
+    background: var(--cdt-card);
+    border: 1px solid var(--cdt-line);
+    border-radius: 8px;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, .72) inset, 0 10px 28px rgba(53, 45, 36, .08);
+    cursor: pointer;
+    animation: cdt-rise .38s cubic-bezier(.2, .8, .2, 1) both;
+    transition: transform .18s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
+  }
+  .card:hover { background: rgba(255, 255, 255, .94); }
+  .card:active {
+    border-color: rgba(21, 111, 112, .28);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, .7) inset, 0 8px 18px rgba(53, 45, 36, .06);
+  }
+  .avatar {
+    width: 42px;
+    height: 42px;
+    border-radius: 8px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 17px;
+    color: #fff;
+    box-shadow: 0 8px 18px rgba(0, 0, 0, .12);
+  }
+  .card .body { flex: 1; min-width: 0; }
+  .card .title2 {
+    color: var(--cdt-ink);
+    font-size: 15px;
+    font-weight: 720;
+    letter-spacing: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .card .sub {
+    color: var(--cdt-muted);
+    font-size: 12px;
+    line-height: 1.35;
+    margin-top: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .chev {
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    background: rgba(32, 29, 26, .04);
+    color: rgba(32, 29, 26, .42);
+    font-size: 21px;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 4px 9px;
+    border-radius: 999px;
+    white-space: nowrap;
+    border: 1px solid var(--cdt-line);
+    color: var(--cdt-muted);
+    background: rgba(255, 255, 255, .62);
+    flex: none;
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .badge.working {
+    color: var(--cdt-good);
+    border-color: rgba(35, 131, 111, .24);
+    background: rgba(226, 247, 239, .82);
+  }
+  .badge.unread {
+    background: var(--cdt-warm);
+    color: #fff;
+    border-color: transparent;
+  }
+  .dot-pulse {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--cdt-good);
+    margin-right: 5px;
+    animation: pulse 1.6s infinite;
+  }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(35, 131, 111, .36); }
+    70% { box-shadow: 0 0 0 8px rgba(35, 131, 111, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(35, 131, 111, 0); }
+  }
+  @keyframes cdt-rise {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes sheet-in {
+    from { opacity: 0; transform: translateY(18px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .empty {
+    margin: 42px 22px;
+    padding: 28px 18px;
+    text-align: center;
+    color: var(--cdt-muted);
+    font-size: 14px;
+    line-height: 1.55;
+    background: rgba(255, 255, 255, .5);
+    border: 1px solid var(--cdt-line);
+    border-radius: 8px;
+  }
+
+  .fab {
+    position: absolute;
+    right: 16px;
+    bottom: calc(16px + env(safe-area-inset-bottom));
+    z-index: 5;
+    min-height: 50px;
+    background: linear-gradient(135deg, var(--cdt-primary), #0a9c8c);
+    color: #fff;
+    border: none;
+    border-radius: 999px;
+    padding: 0 18px;
+    font-size: 14px;
+    font-weight: 760;
+    font-family: inherit;
+    box-shadow: 0 16px 30px rgba(21, 111, 112, .28);
+    cursor: pointer;
+    animation: cdt-rise .32s ease both;
+    transition: transform .18s ease, box-shadow .18s ease;
+  }
+  .fab:active {
+    transform: scale(.97) translateY(1px);
+    box-shadow: 0 10px 20px rgba(21, 111, 112, .24);
+  }
+
+  #cdtMessages {
+    display: flex;
+    flex-direction: column;
+    gap: 11px;
+    padding: 16px 13px 14px;
+  }
+  .bubble2 {
+    max-width: 86%;
+    padding: 10px 13px;
+    border-radius: 18px;
+    color: var(--cdt-ink);
+    font-size: 14px;
+    line-height: 1.48;
+    white-space: pre-wrap;
+    word-break: break-word;
+    animation: cdt-rise .28s ease both;
+  }
+  .row-user { align-self: flex-end; }
+  .row-agent { align-self: flex-start; }
+  .row-user .bubble2 {
+    background: linear-gradient(135deg, var(--cdt-primary), var(--cdt-primary-2));
+    color: #fff;
+    border-bottom-right-radius: 6px;
+    box-shadow: 0 12px 22px rgba(21, 111, 112, .18);
+  }
+  .row-agent .bubble2 {
+    background: var(--cdt-card-solid);
+    border: 1px solid var(--cdt-line);
+    border-bottom-left-radius: 6px;
+    box-shadow: 0 8px 22px rgba(53, 45, 36, .07);
+  }
+  .who2 {
+    color: var(--cdt-muted);
+    font-size: 11px;
+    font-weight: 700;
+    margin: 0 7px 4px;
+  }
+  .row-user .who2 { text-align: right; }
+
+  #conductorView .inputbar {
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+    background: rgba(247, 244, 238, .86);
+    border-top: 1px solid var(--cdt-line);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+  }
+  #conductorView .inputbar input {
+    min-height: 42px;
+    padding: 0 14px;
+    border: 1px solid var(--cdt-line);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .78);
+    color: var(--cdt-ink);
+    font-family: inherit;
+    font-size: 15px;
+  }
+  #conductorView .inputbar input::placeholder,
+  .sheet textarea::placeholder { color: rgba(119, 113, 106, .72); }
+
+  .sheet-bg {
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    display: flex;
+    align-items: flex-end;
+    padding-top: calc(12px + env(safe-area-inset-top));
+    background: rgba(31, 27, 23, .34);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+  .sheet {
+    width: 100%;
+    max-height: 88%;
+    overflow-y: auto;
+    background: #fffaf4;
+    border-top: 1px solid rgba(58, 49, 42, .1);
+    border-radius: 22px 22px 0 0;
+    padding: 20px 16px calc(18px + env(safe-area-inset-bottom));
+    box-shadow: 0 -18px 50px rgba(50, 40, 30, .18);
+    animation: sheet-in .28s cubic-bezier(.2, .8, .2, 1) both;
+  }
+  .sheet h2 {
+    margin: 0 0 12px;
+    color: var(--cdt-ink);
+    font-size: 20px;
+    font-weight: 780;
+    letter-spacing: 0;
+  }
+  .sheet .hint {
+    color: var(--cdt-muted);
+    font-size: 12px;
+    font-weight: 750;
+    margin: 10px 0 7px;
+  }
+  .chips {
+    display: flex;
+    gap: 8px;
+    margin: 0 -16px 14px;
+    padding: 0 16px 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip {
+    flex: none;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 9px 13px;
+    border: 1px solid var(--cdt-line);
+    border-radius: 999px;
+    color: var(--cdt-ink);
+    background: rgba(255, 255, 255, .72);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 650;
+    transition: transform .18s ease, background .18s ease, border-color .18s ease;
+  }
+  .chip.sel {
+    background: rgba(21, 111, 112, .1);
+    border-color: rgba(21, 111, 112, .28);
+    color: var(--cdt-primary);
+  }
+  .sheet textarea {
+    width: 100%;
+    min-height: 126px;
+    background: rgba(255, 255, 255, .76);
+    color: var(--cdt-ink);
+    border: 1px solid var(--cdt-line);
+    border-radius: 8px;
+    padding: 13px;
+    font-family: inherit;
+    font-size: 15px;
+    line-height: 1.45;
+    resize: vertical;
+    outline: none;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, .74) inset;
+  }
+  .sheet textarea:focus,
+  #conductorView .inputbar input:focus {
+    border-color: rgba(21, 111, 112, .34);
+    box-shadow: 0 0 0 4px rgba(21, 111, 112, .1);
+  }
+  .sheet .actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 13px;
+  }
+  .sheet .actions button {
+    flex: 1;
+    padding: 0 14px;
+  }
+  #cdtCreateStatus,
+  #cdtSendStatus {
+    color: var(--cdt-muted) !important;
+    font-family: inherit;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .card, .fab, .bubble2, .sheet, .dot-pulse { animation: none; }
+    #conductorView header button,
+    #conductorView .inputbar button,
+    .sheet .actions button,
+    .card,
+    .chip,
+    .fab { transition: none; }
+  }
 </style>
 </head>
 <body>
@@ -132,25 +507,47 @@
 </div>
 
 <!-- Conductor screen -->
-<div id="conductorView" class="hidden" style="display:flex;flex-direction:column;height:100%">
+<div id="conductorView" class="hidden" style="position:relative;display:flex;flex-direction:column;height:100%">
   <header>
     <button id="cdtBack">‹ Terminal</button>
-    <span class="title" id="cdtTitle">Conductor</span>
+    <span class="title" id="cdtTitle">Projects</span>
     <span class="spacer"></span>
-    <button id="cdtRefresh">↻</button>
+    <button id="cdtRefresh" title="Refresh">↻</button>
   </header>
 
-  <!-- Chats list -->
-  <div id="cdtList" style="flex:1;overflow-y:auto"></div>
+  <!-- Level 1: Projects -->
+  <div id="cdtProjects" class="cdt-screen"></div>
 
-  <!-- One chat -->
+  <!-- Level 2: Chats in a project -->
+  <div id="cdtChats" class="cdt-screen hidden"></div>
+
+  <!-- Level 3: One chat -->
   <div id="cdtChat" class="hidden" style="flex:1;display:flex;flex-direction:column;min-height:0">
-    <div id="cdtMessages" style="flex:1;overflow-y:auto;padding:12px 14px"></div>
+    <div id="cdtMessages" style="flex:1;overflow-y:auto"></div>
     <div class="inputbar">
-      <input id="cdtInput" placeholder="Send a command to this project…" autocapitalize="sentences" />
+      <input id="cdtInput" placeholder="Message this chat…" autocapitalize="sentences" />
       <button id="cdtSend" class="prominent">Send</button>
     </div>
     <div id="cdtSendStatus" class="sys" style="padding:0 14px 8px;font-size:12px;color:var(--muted)"></div>
+  </div>
+
+  <!-- Floating New Task button (projects & chats levels) -->
+  <button id="cdtFab" class="fab hidden">＋ New task</button>
+
+  <!-- New-task compose sheet -->
+  <div id="cdtSheet" class="sheet-bg hidden">
+    <div class="sheet">
+      <h2>New Task</h2>
+      <div class="hint">Which project?</div>
+      <div id="cdtChips" class="chips"></div>
+      <div class="hint">What should the agent do?</div>
+      <textarea id="cdtPrompt" placeholder="e.g. Add a /health endpoint and a test for it."></textarea>
+      <div class="actions">
+        <button id="cdtCancel">Cancel</button>
+        <button id="cdtCreate" class="prominent">Create task</button>
+      </div>
+      <div id="cdtCreateStatus" class="sys" style="font-size:12px;color:var(--muted);margin-top:10px"></div>
+    </div>
   </div>
 </div>
 
@@ -327,68 +724,140 @@ $("histPrev").onclick = () => recall(-1);
 $("histNext").onclick = () => recall(1);
 $("awakeBtn").onclick = () => sendRaw(awakeState ? "AWAKE_OFF" : "AWAKE_ON");
 
-// ---------------- Conductor browser ----------------
+// ---------------- Conductor (Projects → Chats → Chat) ----------------
+let cdtLevel = "projects";        // "projects" | "chats" | "chat"
+let cdtProjectsData = [];
+let cdtSessionsData = [];
+let cdtCurrentProject = null;     // {id, name, root_path}
 let cdtCurrentSession = null;
+let cdtComposeProject = null;
+let cdtHasToken = false;          // does the server have a Conductor API token?
 
 function showConductor(on) {
   $("termView").classList.toggle("hidden", on);
   $("conductorView").classList.toggle("hidden", !on);
 }
 
+function setLevel(level) {
+  cdtLevel = level;
+  $("cdtProjects").classList.toggle("hidden", level !== "projects");
+  $("cdtChats").classList.toggle("hidden", level !== "chats");
+  $("cdtChat").classList.toggle("hidden", level !== "chat");
+  $("cdtFab").classList.toggle("hidden", level === "chat");
+  if (level === "projects") {
+    $("cdtTitle").textContent = "Projects";
+    $("cdtBack").textContent = "‹ Terminal";
+  } else if (level === "chats") {
+    $("cdtTitle").textContent = cdtCurrentProject ? cdtCurrentProject.name : "Chats";
+    $("cdtBack").textContent = "‹ Projects";
+  } else {
+    $("cdtBack").textContent = cdtCurrentProject ? "‹ " + cdtCurrentProject.name : "‹ Back";
+  }
+}
+
 function openConductor() {
   showConductor(true);
-  showChatList();
-  loadSessions();
-}
-
-function showChatList() {
+  cdtCurrentProject = null;
   cdtCurrentSession = null;
-  $("cdtChat").classList.add("hidden");
-  $("cdtList").classList.remove("hidden");
-  $("cdtTitle").textContent = "Conductor";
+  setLevel("projects");
+  loadConductor();
 }
 
-function loadSessions() {
-  $("cdtList").innerHTML = '<div class="cdt-proj">Loading…</div>';
+function loadConductor() {
+  $("cdtProjects").innerHTML = '<div class="empty">Loading…</div>';
+  sendRaw("CDT:projects");
   sendRaw("CDT:sessions");
 }
 
-function renderSessions(items) {
-  const list = $("cdtList");
-  list.innerHTML = "";
-  if (!items.length) { list.innerHTML = '<div class="cdt-proj">No chats found.</div>'; return; }
-  let lastProj = null;
-  for (const s of items) {
-    const proj = s.project || "—";
-    if (proj !== lastProj) {
-      const h = document.createElement("div");
-      h.className = "cdt-proj";
-      h.textContent = proj;
-      list.appendChild(h);
-      lastProj = proj;
-    }
-    const row = document.createElement("div");
-    row.className = "cdt-item";
-    const badge = s.status === "working"
-      ? '<span class="cdt-badge working">working</span>'
-      : (s.unread ? `<span class="cdt-badge unread">${s.unread}</span>`
-                  : `<span class="cdt-badge">${s.status || "idle"}</span>`);
-    const sub = [s.workspace_name || s.branch || "", s.model || ""].filter(Boolean).join(" · ");
-    row.innerHTML =
-      `<div class="body"><div class="t"></div><div class="sub"></div></div>${badge}`;
-    row.querySelector(".t").textContent = s.title || "Untitled";
-    row.querySelector(".sub").textContent = sub;
-    row.onclick = () => openChat(s.id, s.title || "Untitled");
-    list.appendChild(row);
+function projColor(name) {
+  let h = 0;
+  for (const c of (name || "?")) h = (h * 31 + c.charCodeAt(0)) % 360;
+  return `hsl(${h}, 52%, 45%)`;
+}
+
+function relTime(s) {
+  if (!s) return "";
+  const t = Date.parse(s.replace(" ", "T") + "Z");   // DB stores UTC
+  if (isNaN(t)) return "";
+  const d = (Date.now() - t) / 1000;
+  if (d < 60) return "just now";
+  if (d < 3600) return Math.floor(d / 60) + "m ago";
+  if (d < 86400) return Math.floor(d / 3600) + "h ago";
+  return Math.floor(d / 86400) + "d ago";
+}
+
+function sessionsFor(projectId) {
+  return cdtSessionsData.filter((s) => s.project_id === projectId);
+}
+
+function statusBadge(s) {
+  if (s.status === "working") return '<span class="badge working"><span class="dot-pulse"></span>working</span>';
+  if (s.unread) return `<span class="badge unread">${s.unread}</span>`;
+  return `<span class="badge">${s.status || "idle"}</span>`;
+}
+
+function renderProjects() {
+  const box = $("cdtProjects");
+  if (!cdtProjectsData.length) { box.innerHTML = '<div class="empty">No projects found.</div>'; return; }
+  box.innerHTML = "";
+  const wrap = document.createElement("div");
+  wrap.className = "cdt-scroll";
+  for (const p of cdtProjectsData) {
+    const sess = sessionsFor(p.id);
+    const working = sess.filter((s) => s.status === "working").length;
+    const card = document.createElement("div");
+    card.className = "card";
+    const sub = [`${sess.length} chat${sess.length === 1 ? "" : "s"}`];
+    if (working) sub.push(`${working} working`);
+    card.innerHTML =
+      `<div class="avatar" style="background:${projColor(p.name)}">${(p.name || "?")[0].toUpperCase()}</div>` +
+      `<div class="body"><div class="title2"></div><div class="sub"></div></div>` +
+      (working ? '<span class="badge working"><span class="dot-pulse"></span></span>' : "") +
+      `<span class="chev">›</span>`;
+    card.querySelector(".title2").textContent = p.name;
+    card.querySelector(".sub").textContent = sub.join(" · ");
+    card.onclick = () => openProject(p);
+    wrap.appendChild(card);
   }
+  box.appendChild(wrap);
+}
+
+function openProject(p) {
+  cdtCurrentProject = p;
+  setLevel("chats");
+  renderChats();
+}
+
+function renderChats() {
+  const box = $("cdtChats");
+  const sess = cdtCurrentProject ? sessionsFor(cdtCurrentProject.id) : cdtSessionsData;
+  if (!sess.length) {
+    box.innerHTML = '<div class="empty">No chats in this project yet.<br>Tap “＋ New task” to start one.</div>';
+    return;
+  }
+  box.innerHTML = "";
+  const wrap = document.createElement("div");
+  wrap.className = "cdt-scroll";
+  for (const s of sess) {
+    const card = document.createElement("div");
+    card.className = "card";
+    const sub = [s.branch || s.workspace_name || "", relTime(s.updated_at)].filter(Boolean).join(" · ");
+    card.innerHTML =
+      `<div class="body"><div class="title2"></div><div class="sub"></div></div>` +
+      statusBadge(s) + `<span class="chev">›</span>`;
+    card.querySelector(".title2").textContent = s.title || "Untitled";
+    card.querySelector(".sub").textContent = sub;
+    card.onclick = () => openChat(s.id, s.title || "Untitled");
+    wrap.appendChild(card);
+  }
+  box.appendChild(wrap);
 }
 
 function openChat(sessionId, title) {
   cdtCurrentSession = sessionId;
-  $("cdtList").classList.add("hidden");
-  $("cdtChat").classList.remove("hidden");
+  setLevel("chat");
   $("cdtTitle").textContent = title;
-  $("cdtMessages").innerHTML = '<div class="cdt-proj">Loading…</div>';
+  $("cdtMessages").innerHTML = '<div class="empty">Loading…</div>';
   $("cdtSendStatus").textContent = "";
   sendRaw("CDT:messages:" + sessionId);
 }
@@ -396,54 +865,131 @@ function openChat(sessionId, title) {
 function renderMessages(sessionId, items) {
   if (sessionId !== cdtCurrentSession) return;
   const box = $("cdtMessages");
+  if (!items.length) { box.innerHTML = '<div class="empty">No messages yet.</div>'; return; }
   box.innerHTML = "";
-  if (!items.length) { box.innerHTML = '<div class="cdt-proj">No messages yet.</div>'; }
   for (const m of items) {
-    const div = document.createElement("div");
-    div.className = "msg " + (m.role === "user" ? "user" : "assistant");
-    div.innerHTML = '<div class="who"></div><div class="bubble"></div>';
-    div.querySelector(".who").textContent = m.role === "user" ? "You" : "Agent";
-    div.querySelector(".bubble").textContent = m.text;
-    box.appendChild(div);
+    const isUser = m.role === "user";
+    const row = document.createElement("div");
+    row.className = isUser ? "row-user" : "row-agent";
+    row.innerHTML = '<div class="who2"></div><div class="bubble2"></div>';
+    row.querySelector(".who2").textContent = isUser ? "You" : "Agent";
+    row.querySelector(".bubble2").textContent = m.text;
+    box.appendChild(row);
   }
   box.scrollTop = box.scrollHeight;
+}
+
+function updateComposerMode() {
+  const proj = cdtCurrentProject ? cdtCurrentProject.name : "this project";
+  if (cdtHasToken) {
+    $("cdtInput").placeholder = "Reply in this chat…";
+    $("cdtSendStatus").textContent = "";
+  } else {
+    // Be honest: free mode can't continue this exact chat.
+    $("cdtInput").placeholder = "Start a new task in " + proj + "…";
+    $("cdtSendStatus").textContent =
+      "Replies need a Conductor API token. Without one, Send starts a new task in "
+      + proj + ".";
+  }
 }
 
 function sendToChat() {
   const text = $("cdtInput").value.trim();
   if (!text || !cdtCurrentSession) return;
-  // ":" is the delimiter, but the message can contain colons — the server
-  // splits only on the first two, so the rest is preserved.
+  // The message can contain colons; the server splits only on the first two.
   sendRaw("CDT:send:" + cdtCurrentSession + ":" + text);
   $("cdtInput").value = "";
-  $("cdtSendStatus").textContent = "Sending…";
+  $("cdtSendStatus").textContent = cdtHasToken ? "Sending…" : "Starting a new task…";
 }
 
+// ---- New Task compose sheet ----
+function openSheet() {
+  cdtComposeProject = cdtCurrentProject || cdtProjectsData[0] || null;
+  const chips = $("cdtChips");
+  chips.innerHTML = "";
+  for (const p of cdtProjectsData) {
+    const c = document.createElement("div");
+    c.className = "chip" + (cdtComposeProject && p.id === cdtComposeProject.id ? " sel" : "");
+    c.textContent = p.name;
+    c.onclick = () => {
+      cdtComposeProject = p;
+      [...chips.children].forEach((x) => x.classList.remove("sel"));
+      c.classList.add("sel");
+    };
+    chips.appendChild(c);
+  }
+  $("cdtPrompt").value = "";
+  $("cdtCreateStatus").textContent = "";
+  $("cdtSheet").classList.remove("hidden");
+  $("cdtPrompt").focus();
+}
+
+function closeSheet() { $("cdtSheet").classList.add("hidden"); }
+
+function createTask() {
+  const prompt = $("cdtPrompt").value.trim();
+  if (!prompt) { $("cdtCreateStatus").textContent = "Type what the agent should do."; return; }
+  const path = cdtComposeProject ? (cdtComposeProject.root_path || "") : "";
+  sendRaw("CDT:newtask:" + path + ":" + prompt);
+  $("cdtCreateStatus").textContent = "Creating task…";
+}
+
+function sheetOpen() { return !$("cdtSheet").classList.contains("hidden"); }
+
 function handleConductor(obj) {
-  if (obj.cdt === "sessions") return renderSessions(obj.items || []);
-  if (obj.cdt === "messages") return renderMessages(obj.session, obj.items || []);
+  if (obj.cdt === "projects") {
+    cdtProjectsData = obj.items || [];
+    if (cdtLevel === "projects") renderProjects();
+    return;
+  }
+  if (obj.cdt === "sessions") {
+    cdtSessionsData = obj.items || [];
+    if (cdtLevel === "projects") renderProjects();
+    else if (cdtLevel === "chats") renderChats();
+    return;
+  }
+  if (obj.cdt === "messages") {
+    cdtHasToken = !!obj.has_token;
+    updateComposerMode();
+    return renderMessages(obj.session, obj.items || []);
+  }
   if (obj.cdt === "sent") {
-    if (!obj.ok) {
-      $("cdtSendStatus").textContent = "Failed: " + (obj.error || "unknown");
-    } else if (obj.mode === "deeplink") {
-      // Free path: a NEW task/workspace was created in Conductor.
-      $("cdtSendStatus").textContent = (obj.note || "New task started ✓")
-        + " Check it in the chat list.";
+    const text = obj.ok ? (obj.note || "Done ✓") : ("Failed: " + (obj.error || "unknown"));
+    if (sheetOpen()) {                     // came from the New Task sheet
+      $("cdtCreateStatus").textContent = text;
+      if (obj.ok) setTimeout(() => { closeSheet(); if (cdtCurrentProject) setLevel("chats"); sendRaw("CDT:sessions"); }, 1300);
+      return;
+    }
+    if (!obj.ok) { $("cdtSendStatus").textContent = text; }
+    else if (obj.mode === "deeplink") {
+      $("cdtSendStatus").textContent = obj.note || "New task started ✓";
+      setTimeout(() => sendRaw("CDT:sessions"), 1500);
     } else {
-      // Paid API: message went into this chat; refresh the transcript.
-      $("cdtSendStatus").textContent = "Sent ✓  (refreshing…)";
-      if (cdtCurrentSession) {
-        setTimeout(() => sendRaw("CDT:messages:" + cdtCurrentSession), 1500);
-      }
+      $("cdtSendStatus").textContent = "Sent ✓ (refreshing…)";
+      if (cdtCurrentSession) setTimeout(() => sendRaw("CDT:messages:" + cdtCurrentSession), 1500);
     }
     return;
   }
-  if (obj.cdt === "error") { $("cdtSendStatus").textContent = "Error: " + obj.error; }
+  if (obj.cdt === "error") {
+    if (sheetOpen()) $("cdtCreateStatus").textContent = "Error: " + obj.error;
+    else $("cdtSendStatus").textContent = "Error: " + obj.error;
+  }
 }
 
+// Wiring
 $("conductorBtn").onclick = openConductor;
-$("cdtBack").onclick = () => { if (cdtCurrentSession) showChatList(); else showConductor(false); };
-$("cdtRefresh").onclick = () => { cdtCurrentSession ? sendRaw("CDT:messages:" + cdtCurrentSession) : loadSessions(); };
+$("cdtBack").onclick = () => {
+  if (cdtLevel === "chat") { cdtCurrentSession = null; setLevel("chats"); }
+  else if (cdtLevel === "chats") { cdtCurrentProject = null; setLevel("projects"); }
+  else showConductor(false);
+};
+$("cdtRefresh").onclick = () => {
+  if (cdtLevel === "chat" && cdtCurrentSession) sendRaw("CDT:messages:" + cdtCurrentSession);
+  else loadConductor();
+};
+$("cdtFab").onclick = openSheet;
+$("cdtCancel").onclick = closeSheet;
+$("cdtCreate").onclick = createTask;
 $("cdtSend").onclick = sendToChat;
 $("cdtInput").addEventListener("keydown", (e) => { if (e.key === "Enter") sendToChat(); });
 document.querySelectorAll(".quickbar button").forEach((b) => {
