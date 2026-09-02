@@ -63,6 +63,13 @@ REPO_ALL_LABEL = os.environ.get("CONDUCTOR_REPO_ALL_LABEL", "All repos")
 # Optional composer click point "x,y" normalized (0..1) if auto-focus fails.
 COMPOSER_XY = os.environ.get("CONDUCTOR_COMPOSER_XY", "").strip()
 SUBMIT_KEY = os.environ.get("CONDUCTOR_SUBMIT_KEY", "enter").strip().lower()
+# When Conductor is closed and we have to launch it, put it into macOS full
+# screen so the sidebar has a stable, maximized layout for OCR. Only applies to a
+# cold launch — if Conductor is already open we leave its windows as the user
+# had them. Set to 0 to just launch it normally.
+LAUNCH_FULLSCREEN = os.environ.get("CONDUCTOR_LAUNCH_FULLSCREEN", "1").strip().lower() not in ("0", "false", "no")
+# Seconds to wait for Conductor's window to appear after a cold launch.
+LAUNCH_TIMEOUT = float(os.environ.get("CONDUCTOR_LAUNCH_TIMEOUT", "12"))
 
 
 def _lazy_pyautogui():
@@ -74,6 +81,95 @@ def _lazy_pyautogui():
 def activate_conductor() -> None:
     subprocess.run(["osascript", "-e", 'tell application "Conductor" to activate'],
                    check=False, timeout=10)
+
+
+def conductor_running() -> bool:
+    """True if the Conductor app currently has a running process."""
+    try:
+        r = subprocess.run(
+            ["osascript", "-e",
+             'tell application "System Events" to (name of processes) contains "Conductor"'],
+            capture_output=True, text=True, timeout=10)
+        return r.stdout.strip() == "true"
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _conductor_window_count() -> int:
+    try:
+        r = subprocess.run(
+            ["osascript", "-e",
+             'tell application "System Events" to tell process "Conductor" to count windows'],
+            capture_output=True, text=True, timeout=10)
+        return int((r.stdout or "0").strip() or 0)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _wait_for_window(timeout: float) -> bool:
+    """Block until Conductor has at least one window on screen, or `timeout`."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _conductor_window_count() > 0:
+            return True
+        time.sleep(0.4)
+    return False
+
+
+def _enter_fullscreen() -> bool:
+    """Put Conductor's front window into macOS full screen.
+
+    Tries the accessibility attribute (AXFullScreen) first; if the app doesn't
+    expose it, falls back to the standard ⌃⌘F "Enter Full Screen" shortcut.
+    """
+    ax = (
+        'tell application "System Events" to tell process "Conductor"\n'
+        '  if (count of windows) is 0 then return "nowin"\n'
+        '  try\n'
+        '    if value of attribute "AXFullScreen" of window 1 is true then return "already"\n'
+        '    set value of attribute "AXFullScreen" of window 1 to true\n'
+        '    return "ok"\n'
+        '  on error errm\n'
+        '    return "err:" & errm\n'
+        '  end try\n'
+        'end tell'
+    )
+    try:
+        r = subprocess.run(["osascript", "-e", ax], capture_output=True, text=True, timeout=10)
+        if (r.stdout or "").strip() in ("ok", "already"):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    # Fallback: the standard "Enter Full Screen" shortcut (needs Conductor front).
+    try:
+        subprocess.run(
+            ["osascript", "-e",
+             'tell application "System Events" to keystroke "f" using {control down, command down}'],
+            check=False, timeout=10)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def ensure_conductor(fullscreen: bool | None = None) -> None:
+    """Make sure Conductor is open and frontmost before we automate it.
+
+    If Conductor was closed, launch it, wait for its window to appear, and (by
+    default) enter full screen so the sidebar layout is stable for OCR. If it was
+    already running we just bring it forward and leave its windows untouched.
+    """
+    if fullscreen is None:
+        fullscreen = LAUNCH_FULLSCREEN
+    was_running = conductor_running()
+    activate_conductor()          # `activate` also launches the app if it was closed
+    if not was_running:
+        _wait_for_window(LAUNCH_TIMEOUT)
+        time.sleep(0.6)           # let the freshly opened UI settle
+        if fullscreen:
+            _enter_fullscreen()
+            time.sleep(1.0)       # wait out the full-screen animation
+    else:
+        time.sleep(0.7)           # brief settle after bringing it forward
 
 
 def _ensure_ocr_binary() -> list[str]:
@@ -333,8 +429,7 @@ def open_chat_and_send(nav, text: str) -> dict:
         return {"ok": False, "error": "No chat name to search for."}
 
     try:
-        activate_conductor()
-        time.sleep(0.7)
+        ensure_conductor()   # launch (full screen) if it was closed, else focus
         # Use the filter flow only if we know the project AND have the icon coord.
         if NAV_MODE == "filter" and project and FILTER_ICON_XY:
             result = _open_chat_via_filter(project, chat_terms, text)
@@ -365,6 +460,12 @@ def _main(argv: list[str]) -> None:
                 time.sleep(0.1)
         except KeyboardInterrupt:
             print()
+    elif cmd == "ensure":
+        # Launch Conductor full screen if it's closed, else just bring it forward.
+        was = conductor_running()
+        ensure_conductor()
+        print(f"Conductor was {'running' if was else 'closed'} → "
+              f"now {'focused' if was else 'launched full screen'}.")
     elif cmd == "ocr":
         for it in screen_ocr():
             print(f'{it["x"]:.3f},{it["y"]:.3f}  {it["text"]!r}')

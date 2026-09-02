@@ -25,7 +25,6 @@ import smtplib
 import ssl
 import subprocess
 import time
-import urllib.request
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -64,8 +63,6 @@ EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER", EMAIL_SENDER)
 SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
 
-DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
-
 HOST_IP = os.environ.get("HOST_IP", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8765"))
 MAX_AUTH_ATTEMPTS = int(os.environ.get("MAX_AUTH_ATTEMPTS", "5"))
@@ -96,32 +93,6 @@ def load_coordinates() -> dict[str, tuple[int, int]]:
 COORDS = load_coordinates()
 
 
-def send_discord_code() -> bool:
-    """Post the auth code to a Discord channel via webhook. Returns True on send."""
-    if not DISCORD_WEBHOOK_URL:
-        return False
-    try:
-        data = json.dumps(
-            {"content": f"🔐 Mac Remote auth code: **{AUTH_CODE}**"}
-        ).encode()
-        req = urllib.request.Request(
-            DISCORD_WEBHOOK_URL,
-            data=data,
-            headers={
-                "Content-Type": "application/json",
-                # Discord/Cloudflare rejects the default urllib UA with 403.
-                "User-Agent": "MacRemote/1.0 (+https://github.com)",
-            },
-            method="POST",
-        )
-        urllib.request.urlopen(req, timeout=10)
-        print("Auth code sent to Discord.")
-        return True
-    except Exception as exc:  # noqa: BLE001 - bad webhook / no network
-        print(f"[warn] Discord send failed: {exc}")
-        return False
-
-
 def send_email_code() -> bool:
     """Email the auth code. Returns True on send, False if not configured."""
     if not EMAIL_SENDER or not EMAIL_PASSWORD:
@@ -145,12 +116,11 @@ def send_email_code() -> bool:
 
 
 def deliver_code() -> None:
-    """Send the code everywhere that's configured (Discord + email) and print it."""
-    sent_discord = send_discord_code()
+    """Email the code if configured, and always print it on the Mac terminal."""
     sent_email = send_email_code()
-    if not (sent_discord or sent_email):
+    if not sent_email:
         print("=" * 52)
-        print("  No delivery configured (Discord/email) — read the code below.")
+        print("  No delivery configured (email) — read the code below.")
     print("=" * 52)
     print(f"  AUTH CODE: {AUTH_CODE}")
     print("=" * 52)
