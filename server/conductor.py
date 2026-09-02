@@ -82,6 +82,69 @@ def list_sessions() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+WORKSPACES_ROOT = os.path.expanduser("~/conductor/workspaces")
+
+
+def build_tree() -> list[dict]:
+    """Full project -> workspaces -> disk path tree (DB + disk verification)."""
+    projects = list_projects()
+    with _connect() as c:
+        ws = c.execute(
+            "SELECT id, repository_id, directory_name, branch, workspace_path "
+            "FROM workspaces"
+        ).fetchall()
+    by_repo: dict[str, list] = {}
+    for w in ws:
+        by_repo.setdefault(w["repository_id"], []).append(dict(w))
+
+    tree = []
+    for p in projects:
+        wss = []
+        for w in by_repo.get(p["id"], []):
+            path = w["workspace_path"]
+            if not path and w["directory_name"]:
+                path = os.path.join(WORKSPACES_ROOT, p["name"], w["directory_name"])
+            wss.append({**w, "path": path,
+                        "exists": bool(path and os.path.isdir(path))})
+        tree.append({**p, "workspaces": wss})
+    return tree
+
+
+def session_nav_info(session_id: str) -> dict:
+    """Everything needed to navigate the Conductor UI to a chat: the project it
+    lives in, the workspace's on-screen names, and the chat title."""
+    with _connect() as c:
+        row = c.execute(
+            """
+            SELECT s.title, w.directory_name, w.branch, w.workspace_path,
+                   r.name AS project
+            FROM sessions s
+            LEFT JOIN workspaces w ON s.workspace_id = w.id
+            LEFT JOIN repos r ON w.repository_id = r.id
+            WHERE s.id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+    if not row:
+        return {}
+    branch = row["branch"]
+    raw_terms = [row["directory_name"], branch]
+    if branch and "/" in branch:
+        raw_terms.append(branch.rsplit("/", 1)[-1])
+    ws_terms: list[str] = []
+    seen: set[str] = set()
+    for v in raw_terms:
+        if v and v.lower() not in seen:
+            seen.add(v.lower())
+            ws_terms.append(v)
+    return {
+        "project": row["project"],
+        "workspace_terms": ws_terms,
+        "session_terms": [row["title"]] if row["title"] else [],
+        "workspace_path": row["workspace_path"],
+    }
+
+
 def _extract_text(raw: str) -> str:
     """Turn a stored message (plain text or Claude-Code JSON) into readable text."""
     raw = (raw or "").strip()
