@@ -772,7 +772,7 @@ const servedHost = location.hostname && location.hostname !== ""
   ? location.hostname : "";
 $("host").value = servedHost || localStorage.getItem("mrt.host") || "";
 
-// Prefill the code: a code in the URL hash (from the scanned QR) wins;
+// Prefill the code: a code in the URL hash (from the connect URL) wins;
 // otherwise reuse the last code that worked. Then, if we have both a host and
 // a code, auto-connect — so from anywhere you just open the page and you're in.
 // (The hash is client-side only and is never sent to a server.)

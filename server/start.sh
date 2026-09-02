@@ -3,7 +3,7 @@
 # One command to start everything on the MacBook:
 #   1. brings up Tailscale (so your iPhone can reach this Mac anywhere)
 #   2. installs Python deps into a local venv (first run only)
-#   3. launches the control server + web terminal, prints URL + QR + auth code
+#   3. launches the control server + web terminal, prints a connect URL + auth code
 #
 # Usage:   ./start.sh
 #

@@ -72,7 +72,7 @@ MAX_AUTH_ATTEMPTS = int(os.environ.get("MAX_AUTH_ATTEMPTS", "5"))
 COORDINATES_FILE = os.environ.get("COORDINATES_FILE", "coordinates.json")
 
 # Auth code: use a fixed code from the environment if set (so you can connect
-# from far away without seeing the Mac's screen/QR), otherwise generate a fresh
+# from far away without seeing the Mac's screen), otherwise generate a fresh
 # random one each start.
 _ENV_CODE = os.environ.get("AUTH_CODE", "").strip()
 AUTH_CODE = _ENV_CODE if _ENV_CODE else f"{random.randint(0, 999999):06d}"
