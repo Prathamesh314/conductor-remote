@@ -19,11 +19,14 @@ struct SettingsView: View {
                         .padding(.top, 8)
                 }
                 .padding(16)
-                .padding(.bottom, 100)
+                .padding(.bottom, 24)
             }
             .background(Color.clear)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { MenuButton() }
+            }
             .toolbarBackground(.hidden, for: .navigationBar)
         }
         .task { await model.refreshAwake() }

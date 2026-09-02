@@ -1019,13 +1019,29 @@ function statusBadge(s) {
   return `<span class="badge">${s.status || "idle"}</span>`;
 }
 
+// Most recent chat activity in a project, as a sortable epoch (0 = no chats).
+function projectLastActivity(projectId) {
+  let newest = 0;
+  for (const s of sessionsFor(projectId)) {
+    const t = Date.parse((s.updated_at || "").replace(" ", "T") + "Z");
+    if (!isNaN(t) && t > newest) newest = t;
+  }
+  return newest;
+}
+
 function renderProjects() {
   const box = $("cdtProjects");
   if (!cdtProjectsData.length) { box.innerHTML = '<div class="empty">No projects found.</div>'; return; }
   box.innerHTML = "";
   const wrap = document.createElement("div");
   wrap.className = "cdt-scroll";
-  for (const p of cdtProjectsData) {
+  // Active projects first: sort by most recent chat, newest at the top.
+  // Ties (and chat-less projects) keep Conductor's original display order.
+  const ordered = cdtProjectsData
+    .map((p, i) => ({ p, i, last: projectLastActivity(p.id) }))
+    .sort((a, b) => b.last - a.last || a.i - b.i)
+    .map((e) => e.p);
+  for (const p of ordered) {
     const sess = sessionsFor(p.id);
     const working = sess.filter((s) => s.status === "working").length;
     const card = document.createElement("div");

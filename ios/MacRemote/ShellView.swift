@@ -20,6 +20,7 @@ struct ShellView: View {
             .navigationTitle("Shell")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) { MenuButton() }
                 ToolbarItem(placement: .topBarTrailing) {
                     Text(cwd)
                         .font(.system(size: 12, design: .monospaced))
@@ -60,7 +61,6 @@ struct ShellView: View {
                     Color.clear.frame(height: 1).id("tail")
                 }
                 .padding(16)
-                .padding(.bottom, 90)
             }
             .onChange(of: lines) { _, _ in
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("tail", anchor: .bottom) }

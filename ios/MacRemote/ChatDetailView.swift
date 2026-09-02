@@ -170,16 +170,22 @@ private struct Bubble: View {
                         .tracking(0.8)
                         .foregroundStyle(Theme.textFaint)
                 }
-                Text(message.text)
-                    .font(.system(size: 15))
-                    .foregroundStyle(message.isUser ? .white : Theme.text)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(bubbleBackground)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .strokeBorder(message.isUser ? Color.clear : Theme.hairline, lineWidth: 1))
+                Group {
+                    if message.isUser {
+                        Text(message.text)
+                            .font(.system(size: 15))
+                            .foregroundStyle(.white)
+                            .textSelection(.enabled)
+                    } else {
+                        MarkdownMessage(text: message.text)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(bubbleBackground)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(message.isUser ? Color.clear : Theme.hairline, lineWidth: 1))
             }
             if !message.isUser { Spacer(minLength: 40) }
         }
