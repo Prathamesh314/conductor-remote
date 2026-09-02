@@ -32,6 +32,7 @@ import websockets
 from dotenv import load_dotenv
 
 import conductor as cdt
+import conductor_ui as cui
 
 # pyautogui is only needed for the UI-clicking commands and requires a GUI
 # session + Accessibility permission. Make it optional so the shell/terminal
@@ -259,8 +260,9 @@ async def handle_conductor(message: str) -> str:
                 result = await asyncio.to_thread(cdt.send_message, sid, text)
                 result.setdefault("mode", "api")
             else:
-                # Free: start a new task in that chat's project via deep link.
-                result = await asyncio.to_thread(cdt.new_task_for_session, sid, text)
+                # Free: reply into the SAME chat by driving the Conductor UI.
+                title = cdt.session_title(sid)
+                result = await asyncio.to_thread(cui.open_chat_and_send, title, text)
             return json.dumps({"cdt": "sent", "session": sid, **result})
         if verb == "newtask":
             path, _, text = arg.partition(":")

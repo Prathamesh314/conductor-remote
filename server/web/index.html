@@ -880,16 +880,14 @@ function renderMessages(sessionId, items) {
 }
 
 function updateComposerMode() {
-  const proj = cdtCurrentProject ? cdtCurrentProject.name : "this project";
+  $("cdtInput").placeholder = "Reply in this chat…";
   if (cdtHasToken) {
-    $("cdtInput").placeholder = "Reply in this chat…";
     $("cdtSendStatus").textContent = "";
   } else {
-    // Be honest: free mode can't continue this exact chat.
-    $("cdtInput").placeholder = "Start a new task in " + proj + "…";
+    // Free mode replies by driving the Conductor app via screen automation.
     $("cdtSendStatus").textContent =
-      "Replies need a Conductor API token. Without one, Send starts a new task in "
-      + proj + ".";
+      "Free mode: replies by controlling the Conductor app. Keep Conductor open "
+      + "with this chat visible in the sidebar.";
   }
 }
 
@@ -899,7 +897,7 @@ function sendToChat() {
   // The message can contain colons; the server splits only on the first two.
   sendRaw("CDT:send:" + cdtCurrentSession + ":" + text);
   $("cdtInput").value = "";
-  $("cdtSendStatus").textContent = cdtHasToken ? "Sending…" : "Starting a new task…";
+  $("cdtSendStatus").textContent = cdtHasToken ? "Sending…" : "Driving Conductor…";
 }
 
 // ---- New Task compose sheet ----
@@ -965,8 +963,12 @@ function handleConductor(obj) {
       $("cdtSendStatus").textContent = obj.note || "New task started ✓";
       setTimeout(() => sendRaw("CDT:sessions"), 1500);
     } else {
-      $("cdtSendStatus").textContent = "Sent ✓ (refreshing…)";
-      if (cdtCurrentSession) setTimeout(() => sendRaw("CDT:messages:" + cdtCurrentSession), 1500);
+      // api reply or free UI-automation reply → both land in this chat
+      $("cdtSendStatus").textContent = (obj.note ? obj.note + " " : "Sent ✓ ") + "(refreshing…)";
+      if (cdtCurrentSession) {
+        setTimeout(() => sendRaw("CDT:messages:" + cdtCurrentSession), 2000);
+        setTimeout(() => sendRaw("CDT:messages:" + cdtCurrentSession), 6000);
+      }
     }
     return;
   }
