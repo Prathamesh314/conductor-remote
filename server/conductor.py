@@ -323,6 +323,15 @@ def new_task(prompt: str, repo_path: str | None = None) -> dict:
     only *pre-fills* the prompt, so (if AUTO_SUBMIT) we then press the send key
     to actually start the agent.
     """
+    # If Conductor is closed, launch it (full screen) first so the deep link
+    # lands in a ready app instead of racing its cold start.
+    try:
+        import conductor_ui as _cui
+        if not _cui.conductor_running():
+            _cui.ensure_conductor()
+    except Exception:  # noqa: BLE001 - never block task creation on this
+        pass
+
     url = deeplink_url(prompt, repo_path)
     try:
         subprocess.run(["open", url], check=True, timeout=10)

@@ -91,7 +91,6 @@ On the phone:
 | `server/calibrate.py` | Helper for finding mouse coordinates for optional UI automation. |
 | `server/coordinates.example.json` | Example `pyautogui` coordinate map. |
 | `server/.env.example` | Environment variable template. |
-| `server/discord_reader.py` | Optional helper to read auth codes from Discord with a bot token. |
 | `ios/MacRemote/` | SwiftUI files for a full native iOS app (browse chats, read transcripts, reply, start tasks, shell, keep-awake). |
 
 ## Setup
@@ -127,7 +126,6 @@ Important variables:
 | `CONDUCTOR_AUTOSUBMIT` | `1` | Press Enter after opening a new-task deep link. |
 | `CONDUCTOR_SUBMIT_DELAY` | `4` | Seconds to wait before autosubmit. |
 | `CONDUCTOR_SUBMIT_KEY` | `enter` | Use `enter` or `cmd-enter` for autosubmit. |
-| `DISCORD_WEBHOOK_URL` | empty | Optional auth-code delivery target. |
 | `EMAIL_SENDER` / `EMAIL_PASSWORD` / `EMAIL_RECEIVER` | empty | Optional email delivery settings. |
 | `COORDINATES_FILE` | `coordinates.json` | Coordinate map for optional UI automation. |
 
