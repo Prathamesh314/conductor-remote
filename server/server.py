@@ -269,6 +269,9 @@ async def handle_conductor(message: str) -> str:
     try:
         if verb == "models":
             return json.dumps({"cdt": "models", **cdt.list_models()})
+        if verb == "addrepo":
+            result = await asyncio.to_thread(cdt.add_repo, arg)
+            return json.dumps({"cdt": "repo", **result})
         if verb == "projects":
             return json.dumps({"cdt": "projects", "items": cdt.list_projects()})
         if verb == "sessions":

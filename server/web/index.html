@@ -345,6 +345,33 @@
     box-shadow: 0 10px 20px rgba(21, 111, 112, .24);
   }
 
+  /* Bottom toast: a subtle dark pill for non-blocking status (e.g. cloning). */
+  #cdtToast {
+    position: absolute;
+    left: 50%;
+    bottom: calc(78px + env(safe-area-inset-bottom));
+    z-index: 20;
+    transform: translateX(-50%);
+    max-width: calc(100% - 32px);
+    padding: 11px 16px;
+    border-radius: 999px;
+    background: rgba(11, 20, 26, .94);
+    color: #e9edef;
+    border: 1px solid var(--cdt-line);
+    box-shadow: var(--cdt-shadow);
+    font-size: 13px;
+    font-weight: 650;
+    line-height: 1.4;
+    text-align: center;
+    overflow-wrap: anywhere;
+    animation: cdt-rise .24s ease both;
+  }
+  #cdtToast.err {
+    background: rgba(229, 72, 77, .96);
+    border-color: transparent;
+    color: #fff;
+  }
+
   #cdtMessages {
     display: flex;
     flex-direction: column;
@@ -701,6 +728,7 @@
     <button id="cdtBack">‹ Terminal</button>
     <span class="title" id="cdtTitle">Projects</span>
     <span class="spacer"></span>
+    <button id="cdtAddRepo" title="Add a GitHub repo">＋ Repo</button>
     <button id="cdtRefresh" title="Refresh">↻</button>
   </header>
   <div id="cdtOffline" class="cdt-offline hidden">
@@ -744,6 +772,9 @@
       <div id="cdtCreateStatus" class="sys" style="font-size:12px;color:var(--muted);margin-top:10px"></div>
     </div>
   </div>
+
+  <!-- Lightweight toast (e.g. "Cloning …", repo-added result) -->
+  <div id="cdtToast" class="hidden"></div>
 </div>
 
 <script>
@@ -1084,6 +1115,18 @@ function finishLogout() {
 
 function sendRaw(v) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(v);
+}
+
+// Non-blocking bottom toast. kind: undefined (neutral pill) | "err" (reddish).
+// textContent keeps server-provided strings XSS-safe; auto-hides after ~4s.
+let cdtToastTimer = null;
+function showToast(msg, kind) {
+  const el = $("cdtToast");
+  el.textContent = msg || "";
+  el.classList.remove("hidden", "err");
+  if (kind === "err") el.classList.add("err");
+  if (cdtToastTimer) clearTimeout(cdtToastTimer);
+  cdtToastTimer = setTimeout(() => el.classList.add("hidden"), 4000);
 }
 
 function setAwakeUI(on) {
@@ -1649,6 +1692,11 @@ function handleConductor(obj) {
     }
     return;
   }
+  if (obj.cdt === "repo") {
+    if (obj.ok) { showToast(obj.note || "Repo cloned ✓"); loadConductor(); }
+    else { showToast(obj.error || "Couldn't add repo", "err"); }
+    return;
+  }
   if (obj.cdt === "error") {
     if (sheetOpen()) $("cdtCreateStatus").textContent = "Error: " + obj.error;
     else setSendStatus(obj.error || "Something went wrong.", "err");
@@ -1665,6 +1713,13 @@ $("cdtBack").onclick = () => {
 $("cdtRefresh").onclick = () => {
   if (cdtLevel === "chat" && cdtCurrentSession) sendRaw("CDT:messages:" + cdtCurrentSession);
   else loadConductor();
+};
+// Ask the Mac to clone a GitHub repo (raw URL or owner/repo, sent verbatim).
+$("cdtAddRepo").onclick = () => {
+  const url = prompt("Add a GitHub repo — paste a URL or owner/repo:");
+  if (!url || !url.trim()) return;
+  showToast("Cloning " + url.trim() + "…");
+  sendRaw("CDT:addrepo:" + url.trim());
 };
 // Reconnect straight from the offline banner, without leaving the current page.
 $("cdtReconnect").onclick = () => {

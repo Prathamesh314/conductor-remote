@@ -222,6 +222,10 @@ final class AppModel: ObservableObject {
         return resp
     }
 
+    func addRepo(_ url: String) async throws -> RepoResult {
+        try await decode(RepoResult.self, from: "CDT:addrepo:\(url)")
+    }
+
     func send(sessionId: String, text: String) async throws -> SendResult {
         try await decode(SendResult.self, from: "CDT:send:\(sessionId):\(text)")
     }

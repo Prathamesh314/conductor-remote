@@ -10,6 +10,9 @@ struct ChatsView: View {
     @State private var loading = true
     @State private var error: String?
     @State private var showNewTask = false
+    @State private var showAddRepo = false
+    @State private var repoURL = ""
+    @State private var repoStatus: String?
     @State private var search = ""
 
     private var filtered: [Project] {
@@ -66,6 +69,12 @@ struct ChatsView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { MenuButton() }
                 ToolbarItem(placement: .topBarTrailing) {
+                    Button { showAddRepo = true } label: {
+                        Image(systemName: "folder.badge.plus")
+                            .font(.system(size: 17, weight: .semibold))
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Button { showNewTask = true } label: {
                         Image(systemName: "square.and.pencil")
                             .font(.system(size: 17, weight: .semibold))
@@ -79,6 +88,34 @@ struct ChatsView: View {
             .sheet(isPresented: $showNewTask) {
                 NewTaskView { await load() }
             }
+            .alert("Add GitHub repo", isPresented: $showAddRepo) {
+                TextField("owner/repo or https://github.com/…", text: $repoURL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Button("Add") { let u = repoURL; repoURL = ""; Task { await addRepo(u) } }
+                Button("Cancel", role: .cancel) { repoURL = "" }
+            } message: {
+                Text("The Mac clones it, then add it in Conductor: New project → choose the folder.")
+            }
+            .overlay(alignment: .bottom) {
+                if let repoStatus {
+                    Text(repoStatus)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Theme.text)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
+                                .strokeBorder(Theme.hairline, lineWidth: 1)
+                        )
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 16)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.spring(response: 0.32, dampingFraction: 0.85), value: repoStatus)
             .toolbarBackground(.hidden, for: .navigationBar)
         }
         .task { await load() }
@@ -118,6 +155,22 @@ struct ChatsView: View {
             self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
         loading = false
+    }
+
+    /// Ask the Mac to clone a GitHub repo, then refresh the project list.
+    private func addRepo(_ url: String) async {
+        let u = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !u.isEmpty else { return }
+        repoStatus = "Cloning \(u)…"
+        do {
+            let r = try await model.addRepo(u)
+            if r.ok == true { repoStatus = r.note ?? "Repo cloned ✓"; await load() }
+            else { repoStatus = r.error ?? "Couldn't add repo" }
+        } catch {
+            repoStatus = (error as? LocalizedError)?.errorDescription ?? "Couldn't add repo"
+        }
+        // auto-clear after a few seconds
+        Task { try? await Task.sleep(nanoseconds: 5_000_000_000); if repoStatus != nil { repoStatus = nil } }
     }
 }
 
