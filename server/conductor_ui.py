@@ -16,6 +16,7 @@ Self-test on the Mac (see what it detects, without sending anything):
     python3 conductor_ui.py ocr                        # dump everything OCR sees
     python3 conductor_ui.py find "istanbul"            # show the sidebar match
     python3 conductor_ui.py ensure                      # launch full screen if closed
+    python3 conductor_ui.py workspace <workspace-id> "hi"   # open EXACT chat + send
     python3 conductor_ui.py model "opus-4-8"            # pick a model in the composer
     python3 conductor_ui.py filter "vagent-backend-py" "istanbul" "your message"
     python3 conductor_ui.py send "istanbul" "your message" "vagent-backend-py"
@@ -62,8 +63,22 @@ FILTER_ICON_XY = os.environ.get("CONDUCTOR_FILTER_ICON_XY", "").strip()
 # The filter panel has a "Repo" row (default value "All repos") — clicking it
 # opens the project list. These labels are OCR text and rarely need changing.
 REPO_ALL_LABEL = os.environ.get("CONDUCTOR_REPO_ALL_LABEL", "All repos")
-# Optional composer click point "x,y" normalized (0..1) if auto-focus fails.
-COMPOSER_XY = os.environ.get("CONDUCTOR_COMPOSER_XY", "").strip()
+# Where the message composer is, as "x,y" screen fractions, so we can click it
+# to focus before typing. Defaults to the bottom-center of a maximized Conductor
+# window; override with CONDUCTOR_COMPOSER_XY (run: conductor_ui.py where) if your
+# layout differs (e.g. the right-hand diff panel is open/closed).
+DEFAULT_COMPOSER_XY = "0.41,0.9"
+COMPOSER_XY = os.environ.get("CONDUCTOR_COMPOSER_XY", "").strip() or DEFAULT_COMPOSER_XY
+# Seconds to wait after opening a chat by deep link before typing into it.
+OPEN_WORKSPACE_DELAY = float(os.environ.get("CONDUCTOR_OPEN_WORKSPACE_DELAY", "3.5"))
+# Seconds to let the Search command palette (⌘K) filter results before Enter.
+PALETTE_RESULT_DELAY = float(os.environ.get("CONDUCTOR_PALETTE_RESULT_DELAY", "1.2"))
+# Most reliable (for remote/phone use): close all Conductor windows first, so the
+# deep link opens exactly ONE window on the target chat and focus can't land on
+# the wrong workspace. Off by default (it closes windows you may have open on the
+# Mac); set CONDUCTOR_REPLY_CLOSE_WINDOWS=1 to enable.
+CLOSE_WINDOWS_FIRST = os.environ.get(
+    "CONDUCTOR_REPLY_CLOSE_WINDOWS", "0").strip().lower() not in ("0", "false", "no", "")
 # The composer's model/agent selector is an icon OCR can't find, so give its
 # position as "x,y" fractions (use: conductor_ui.py where) to enable picking a
 # model on a new task. Without it, model selection is skipped (task uses the
@@ -456,6 +471,175 @@ def _open_chat_via_scroll(chat_terms: list[str], text: str) -> dict:
             "note": f"Opened '{target.get('text', chat_terms[0])}' and sent."}
 
 
+def open_workspace_and_send(workspace_id: str, text: str,
+                            verify_terms: list[str] | None = None) -> dict:
+    """Open the EXACT chat by its workspace id and send `text`.
+
+    Fires the `conductor://workspace/<id>` deep link (deterministic navigation by
+    id, no sidebar scrolling). Then — CRITICALLY — before typing, it OCRs the
+    screen and confirms the chat's own name is visible, so we NEVER type into the
+    wrong chat if the deep link didn't switch (e.g. Conductor was busy/focused
+    elsewhere). If it can't confirm, it refuses to send and reports back rather
+    than posting to whatever chat happened to be open.
+    """
+    if not workspace_id:
+        return {"ok": False, "error": "no workspace id for this chat"}
+    try:
+        ensure_conductor()   # launch (full screen) if closed, else bring forward
+        if CLOSE_WINDOWS_FIRST:
+            _close_all_windows()   # optional: guarantee a single window on the target
+        # The deep link is fired LAST so its target window ends up frontmost.
+        subprocess.run(["open", f"conductor://workspace/{workspace_id}"],
+                       check=True, timeout=10)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"couldn't open the chat: {exc}"}
+    time.sleep(OPEN_WORKSPACE_DELAY)   # let the chat + composer render
+
+    # Safety gate: only type once we can SEE the target chat is open — and we
+    # check the chat-pane HEADER (tab title + breadcrumb), not the whole screen,
+    # so a same-named chat sitting in the SIDEBAR can't fool us into replying to
+    # the wrong chat (the reported bug).
+    if verify_terms:
+        try:
+            if not _chat_header_matches(verify_terms):
+                return {"ok": False, "mode": "deeplink-workspace",
+                        "error": "Opened Conductor but the target chat isn't the one on "
+                        "screen, so nothing was sent (won't risk the wrong chat). Open "
+                        "that chat in Conductor and try again."}
+        except Exception:  # noqa: BLE001 - OCR unavailable → skip the gate, don't block
+            pass
+    try:
+        type_and_send(text)            # clicks the composer (COMPOSER_XY) then types
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"opened the chat but couldn't type: {exc}"}
+    return {"ok": True, "mode": "deeplink-workspace",
+            "note": "Opened the exact chat and sent."}
+
+
+# The open chat's identity (tab title + breadcrumb) sits in a top strip of the
+# chat pane — to the RIGHT of the sidebar and LEFT of the diff panel. We verify
+# there so a same-named chat in the sidebar can't be mistaken for the open one.
+HEADER_MAX_Y = float(os.environ.get("CONDUCTOR_HEADER_MAX_Y", "0.14"))
+HEADER_MIN_X = float(os.environ.get("CONDUCTOR_HEADER_MIN_X", "0.18"))
+HEADER_MAX_X = float(os.environ.get("CONDUCTOR_HEADER_MAX_X", "0.64"))
+
+
+def _palette_is_open() -> bool:
+    """True if Conductor's Search command palette (⌘K) is currently on screen.
+
+    Guards against typing our query into a chat composer when ⌘K didn't open the
+    palette (which could otherwise SEND the query as a message). Detects the
+    palette's tabs / placeholder / results header in the upper half of the screen.
+    """
+    markers = ("workspaces", "actions", "settings", "typeacommandorsearch",
+               "recentworkspaces", "resultsfor")
+    try:
+        for it in screen_ocr():
+            if it["y"] > 0.55:
+                continue
+            t = _norm(it.get("text", ""))
+            if any(m in t for m in markers):
+                return True
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
+def _chat_header_matches(terms) -> bool:
+    """True if the open chat's header shows one of `terms` (title/branch/etc.)."""
+    if isinstance(terms, str):
+        terms = [terms]
+    wants = [_norm(t) for t in terms if _norm(t)]
+    if not wants:
+        return False
+    for it in screen_ocr():
+        if it["y"] > HEADER_MAX_Y or not (HEADER_MIN_X <= it["x"] <= HEADER_MAX_X):
+            continue
+        got = _norm(it.get("text", ""))
+        if len(got) < 3:
+            continue
+        for want in wants:
+            if got == want or want in got or got in want:
+                return True
+    return False
+
+
+def _close_all_windows() -> None:
+    """Close every Conductor window (File → Close All) for a clean single-window
+    slate before opening the target. Best-effort."""
+    try:
+        subprocess.run(
+            ["osascript", "-e",
+             'tell application "System Events" to tell process "Conductor" to '
+             'click menu item "Close All" of menu 1 of menu bar item "File" of menu bar 1'],
+            check=False, timeout=10)
+        time.sleep(1.0)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def open_chat_via_palette(query: str, verify_terms, text: str) -> dict:
+    """Navigate to the target chat using Conductor's own Search command palette
+    (⌘K), then verify + send. This is the reliable free path: it uses Conductor's
+    built-in workspace switcher, so it works on an ALREADY-OPEN window — no
+    closing windows, no deep link, no API token.
+
+    Flow: ⌘K opens Search → clear any old text → type `query` (the workspace's
+    current branch/name) → Enter selects the top result → Conductor navigates the
+    current window to it. Then we OCR the chat HEADER to confirm the right chat is
+    showing and only then type + send (never the wrong chat).
+    """
+    if not query:
+        return {"ok": False, "error": "no search term for the chat"}
+    try:
+        pg = _lazy_pyautogui()
+        ensure_conductor()
+        time.sleep(0.4)
+        pg.hotkey("command", "k")                 # open the Search palette
+        time.sleep(0.9)
+        # SAFETY: only type once the palette is actually open. Otherwise our
+        # keystrokes (and Enter) would go into a chat composer and could SEND the
+        # query as a message to the wrong chat.
+        if not _palette_is_open():
+            try:
+                pg.press("esc")
+            except Exception:  # noqa: BLE001
+                pass
+            return {"ok": False, "mode": "palette",
+                    "error": "Couldn't open Conductor's Search (⌘K); nothing typed or sent."}
+        pg.hotkey("command", "a")                 # clear any retained query
+        time.sleep(0.1)
+        pg.press("delete")
+        time.sleep(0.1)
+        pg.write(query, interval=0.02)            # type the workspace name
+        time.sleep(PALETTE_RESULT_DELAY)          # let results settle
+        # Still in the palette? (typing shouldn't have dismissed it.)
+        if not _palette_is_open():
+            return {"ok": False, "mode": "palette",
+                    "error": "Search palette closed unexpectedly; nothing sent."}
+        pg.press("enter")                         # navigate to the top result
+        time.sleep(OPEN_WORKSPACE_DELAY)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"palette navigation failed: {exc}"}
+
+    if verify_terms and not _chat_header_matches(verify_terms):
+        # Enter didn't land us on the target (wrong top result, or focus snapped
+        # away) — refuse rather than type into whatever chat is showing.
+        try:
+            pg.press("esc")
+        except Exception:  # noqa: BLE001
+            pass
+        return {"ok": False, "mode": "palette",
+                "error": "Searched Conductor but the target chat isn't the one on screen, "
+                "so nothing was sent (won't risk the wrong chat)."}
+    try:
+        type_and_send(text)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"navigated but couldn't type: {exc}"}
+    return {"ok": True, "mode": "palette",
+            "note": f"Navigated via Search to '{query}' and sent."}
+
+
 def open_chat_and_send(nav, text: str) -> dict:
     """Activate Conductor, navigate to the chat, type + send.
 
@@ -531,6 +715,9 @@ def _main(argv: list[str]) -> None:
         # test picking a model in the composer: model <model-id> [agent]
         activate_conductor(); time.sleep(0.7)
         print(select_model(argv[1], argv[2] if len(argv) > 2 else None))
+    elif cmd == "workspace" and len(argv) > 2:
+        # test the reliable reply: workspace <workspace-id> <message>
+        print(open_workspace_and_send(argv[1], argv[2]))
     elif cmd == "filter" and len(argv) > 3:
         # test the full filter flow: filter <project> <chat> <message>
         activate_conductor(); time.sleep(0.7)

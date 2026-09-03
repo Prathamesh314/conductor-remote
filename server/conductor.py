@@ -218,6 +218,16 @@ def repo_path_for_session(session_id: str) -> str | None:
     return row["root_path"] if row and row["root_path"] else None
 
 
+def workspace_id_for_session(session_id: str) -> str | None:
+    """The stable workspace id for a session — used to open the EXACT chat via a
+    conductor://workspace/<id> deep link (deterministic, no sidebar OCR)."""
+    with _connect() as c:
+        row = c.execute(
+            "SELECT workspace_id FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+    return row["workspace_id"] if row and row["workspace_id"] else None
+
+
 def list_sessions() -> list[dict]:
     """Chats, newest first, mirroring what the Conductor app shows.
 

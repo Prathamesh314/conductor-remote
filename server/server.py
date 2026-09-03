@@ -221,6 +221,12 @@ def set_caffeinate(on: bool) -> str:
 _recent_sends: dict[tuple[str, str], float] = {}
 _DUP_WINDOW_S = float(os.environ.get("CDT_DUP_WINDOW_S", "15"))
 
+# When a free-mode reply can't open the existing chat, DON'T silently start a new
+# workspace (that spawns duplicate chats — the #1 complaint). Default off; set to
+# 1 to restore the old "start a new task in the same project instead" fallback.
+REPLY_FALLBACK_NEWTASK = os.environ.get(
+    "CONDUCTOR_REPLY_FALLBACK_NEWTASK", "0").strip().lower() not in ("0", "false", "no", "")
+
 
 def _is_duplicate_send(sid: str, text: str) -> bool:
     """True if this exact (session, text) was just sent within the dedup window."""
@@ -311,25 +317,44 @@ async def handle_conductor(message: str) -> str:
                 result = await asyncio.to_thread(cdt.send_message, sid, text)
                 result.setdefault("mode", "api")
             else:
-                # Free: reply into the SAME chat by driving the Conductor UI.
-                # nav_info gives the project + workspace/branch names so the
-                # automation can scroll/filter to the chat.
-                nav = cdt.session_nav_info(sid) or {
-                    "workspace_terms": [cdt.session_title(sid)]}
-                result = await asyncio.to_thread(cui.open_chat_and_send, nav, text)
+                # Free (no token): open the EXACT chat by its stable workspace id
+                # via a conductor://workspace/<id> deep link — deterministic, so we
+                # never land on the wrong chat or spawn a new one. Only if the id is
+                # somehow missing do we fall back to the OCR sidebar search.
+                # Names to CONFIRM the right chat is on screen before typing
+                # (so we never reply into the wrong chat).
+                verify = await asyncio.to_thread(cdt.session_search_terms, sid)
+                ident = await asyncio.to_thread(cdt.session_identity, sid)
+                query = (ident.get("branch") or ident.get("title")
+                         or ident.get("directory_name") or "")
+                # Primary: Conductor's own Search palette (⌘K) — navigates an
+                # already-open window, no window-closing, no token.
+                result = await asyncio.to_thread(cui.open_chat_via_palette, query, verify, text)
                 if not result.get("ok"):
-                    # Chat not found / UI automation failed → fall back to the
-                    # OLD deep-link solution: create a NEW task in the SAME
-                    # project (repo path comes from this chat's session).
-                    fb = await asyncio.to_thread(cdt.new_task_for_session, sid, text)
-                    if fb.get("ok"):
-                        fb["fallback"] = True
-                        fb["note"] = ("Couldn't open the existing chat, so started "
-                                      "a new task in the same project instead.")
-                        result = fb
-                    elif fb.get("repo_missing"):
-                        # Git repo absent on disk → surface that, do NOT create.
-                        result = fb
+                    # Fallback: open the exact workspace by id via deep link
+                    # (works best when Conductor has no window open).
+                    wsid = await asyncio.to_thread(cdt.workspace_id_for_session, sid)
+                    if wsid:
+                        result = await asyncio.to_thread(
+                            cui.open_workspace_and_send, wsid, text, verify)
+                if not result.get("ok"):
+                    if REPLY_FALLBACK_NEWTASK:
+                        # Opt-in legacy behavior: start a new task in the same project.
+                        fb = await asyncio.to_thread(cdt.new_task_for_session, sid, text)
+                        if fb.get("ok"):
+                            fb["fallback"] = True
+                            fb["note"] = ("Couldn't open the existing chat, so started "
+                                          "a new task in the same project instead.")
+                            result = fb
+                        elif fb.get("repo_missing"):
+                            result = fb
+                    else:
+                        # Default: report the failure instead of creating a new
+                        # workspace, so the phone can retry rather than duplicate.
+                        result = {"ok": False, "mode": result.get("mode", "uiauto"),
+                                  "error": result.get("error") or
+                                  "Couldn't open that chat on the Mac. Make sure Conductor "
+                                  "is running, or set CONDUCTOR_API_TOKEN for reliable replies."}
             return json.dumps({"cdt": "sent", "session": sid, **result})
         if verb == "newtask":
             # New clients send a JSON payload (so a model/agent/effort can ride
