@@ -60,10 +60,39 @@ struct ChatMessage: Codable, Identifiable, Hashable {
     var isAssistant: Bool { role.lowercased() == "assistant" }
 }
 
+/// One agent's available models + effort levels, as returned by CDT:models.
+struct AgentModels: Codable, Identifiable, Hashable {
+    var id: String { agent }
+    let agent: String
+    let models: [String]
+    let efforts: [String]
+    let defaultModel: String?
+    let defaultEffort: String?
+    let fastModeModels: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case agent, models, efforts
+        case defaultModel = "default_model"
+        case defaultEffort = "default_effort"
+        case fastModeModels = "fast_mode_models"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        agent = try c.decode(String.self, forKey: .agent)
+        models = try c.decodeIfPresent([String].self, forKey: .models) ?? []
+        efforts = try c.decodeIfPresent([String].self, forKey: .efforts) ?? []
+        defaultModel = try c.decodeIfPresent(String.self, forKey: .defaultModel)
+        defaultEffort = try c.decodeIfPresent(String.self, forKey: .defaultEffort)
+        fastModeModels = try c.decodeIfPresent([String].self, forKey: .fastModeModels)
+    }
+}
+
 // MARK: - Response envelopes
 
 struct ProjectsResponse: Codable { let items: [Project] }
 struct SessionsResponse: Codable { let items: [Session] }
+struct ModelsResponse: Codable { let agents: [AgentModels]; let error: String? }
 
 struct MessagesResponse: Codable {
     let session: String?

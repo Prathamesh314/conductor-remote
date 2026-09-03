@@ -234,6 +234,8 @@ async def handle_conductor(message: str) -> str:
     rest = message.split("CDT:", 1)[1]
     verb, _, arg = rest.partition(":")
     try:
+        if verb == "models":
+            return json.dumps({"cdt": "models", **cdt.list_models()})
         if verb == "projects":
             return json.dumps({"cdt": "projects", "items": cdt.list_projects()})
         if verb == "sessions":
@@ -280,8 +282,23 @@ async def handle_conductor(message: str) -> str:
                         result = fb
             return json.dumps({"cdt": "sent", "session": sid, **result})
         if verb == "newtask":
-            path, _, text = arg.partition(":")
-            result = await asyncio.to_thread(cdt.new_task, text, path or None)
+            # New clients send a JSON payload (so a model/agent/effort can ride
+            # along); older clients send the plain "path:prompt" form.
+            arg_s = arg.strip()
+            if arg_s.startswith("{"):
+                try:
+                    payload = json.loads(arg_s)
+                except Exception:  # noqa: BLE001
+                    return json.dumps({"cdt": "error", "error": "bad newtask payload"})
+                path = payload.get("path") or None
+                text = payload.get("prompt") or ""
+                agent = payload.get("agent") or None
+                model = payload.get("model") or None
+                effort = payload.get("effort") or None
+            else:
+                path, _, text = arg.partition(":")
+                path, agent, model, effort = (path or None), None, None, None
+            result = await asyncio.to_thread(cdt.new_task, text, path, agent, model, effort)
             return json.dumps({"cdt": "sent", **result})
     except Exception as exc:  # noqa: BLE001 - surface any DB/CLI error to the UI
         return json.dumps({"cdt": "error", "error": str(exc)})

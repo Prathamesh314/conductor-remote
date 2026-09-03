@@ -31,6 +31,43 @@ def available() -> bool:
     return os.path.exists(DB_PATH)
 
 
+def list_models() -> dict:
+    """Available agents and their model ids / effort levels / defaults.
+
+    Reads `conductor models --json` (works without a token). Returns a normalized
+    shape the phone can render a picker from:
+
+        {"agents": [{"agent": "claude", "models": [...], "efforts": [...],
+                     "default_model": "sonnet", "default_effort": "high",
+                     "fast_mode_models": [...]}],
+         "cloud": <bool>}   # whether picking a model actually creates a cloud task
+
+    On any failure returns {"agents": [], "error": "..."}.
+    """
+    if not os.path.exists(CLI_PATH):
+        return {"agents": [], "error": "Conductor CLI not found — is Conductor installed?"}
+    try:
+        res = subprocess.run([CLI_PATH, "--json", "models"],
+                             capture_output=True, text=True, timeout=20)
+        if res.returncode != 0:
+            return {"agents": [], "error": (res.stderr or res.stdout).strip()[:300]}
+        raw = json.loads(res.stdout or "{}")
+    except Exception as exc:  # noqa: BLE001 - CLI missing / bad JSON
+        return {"agents": [], "error": str(exc)}
+
+    agents = []
+    for a in raw.get("agents", []):
+        agents.append({
+            "agent": a.get("agent"),
+            "models": a.get("models", []),
+            "efforts": a.get("efforts", []),
+            "default_model": a.get("defaultModel"),
+            "default_effort": a.get("defaultEffort"),
+            "fast_mode_models": a.get("fastModeModels", []),
+        })
+    return {"agents": agents}
+
+
 def _connect() -> sqlite3.Connection:
     # Read-only so we never disturb the live app.
     conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=5)
@@ -316,18 +353,25 @@ def _submit_keystroke() -> None:
                    capture_output=True, text=True)
 
 
-def new_task(prompt: str, repo_path: str | None = None) -> dict:
+def new_task(prompt: str, repo_path: str | None = None,
+             agent: str | None = None, model: str | None = None,
+             effort: str | None = None) -> dict:
     """Create a new Conductor task/workspace with a prompt (FREE, no token).
 
     Uses the official conductor:// deep link, opened via `open`. The deep link
-    only *pre-fills* the prompt, so (if AUTO_SUBMIT) we then press the send key
-    to actually start the agent.
+    only *pre-fills* the prompt (it can't carry a model), so — if a `model` was
+    picked — we set it in the composer via UI automation before pressing send.
+    (if AUTO_SUBMIT) we then press the send key to actually start the agent.
     """
+    try:
+        import conductor_ui as _cui
+    except Exception:  # noqa: BLE001
+        _cui = None
+
     # If Conductor is closed, launch it (full screen) first so the deep link
     # lands in a ready app instead of racing its cold start.
     try:
-        import conductor_ui as _cui
-        if not _cui.conductor_running():
+        if _cui and not _cui.conductor_running():
             _cui.ensure_conductor()
     except Exception:  # noqa: BLE001 - never block task creation on this
         pass
@@ -341,18 +385,33 @@ def new_task(prompt: str, repo_path: str | None = None) -> dict:
     where = repo_path or "the first available repo"
     note = f"Started a new Conductor task in {where}."
 
+    def _settle_and_apply_model(settle: float) -> str:
+        """Wait for the composer, then (if a model was picked) select it in the
+        Conductor UI. Returns a short note describing the outcome."""
+        time.sleep(settle)                 # also the pre-submit settle wait
+        if not model:
+            return ""
+        if not _cui:
+            return f" (Wanted {model}; UI automation unavailable.)"
+        try:
+            sel = _cui.select_model(model, agent)
+        except Exception as exc:  # noqa: BLE001
+            return f" (Couldn't set model {model}: {exc}.)"
+        return (f" Model: {model}." if sel.get("ok")
+                else f" (Wanted {model}: {sel.get('error', 'not found')}.)")
+
     if not AUTO_SUBMIT:
         # Give Conductor a moment to create the workspace, then hand back the
         # new session id so the phone can jump straight into it.
-        time.sleep(min(SUBMIT_DELAY, 3))
+        model_note = _settle_and_apply_model(min(SUBMIT_DELAY, 3))
         return {"ok": True, "mode": "deeplink",
-                "note": note + " Prompt pre-filled — press Enter in Conductor to send.",
+                "note": note + model_note + " Prompt pre-filled — press Enter in Conductor to send.",
                 "new_session": newest_session_for_repo(repo_path)}
 
-    time.sleep(SUBMIT_DELAY)
+    model_note = _settle_and_apply_model(SUBMIT_DELAY)
     try:
         _submit_keystroke()
-        return {"ok": True, "mode": "deeplink", "note": note + " Prompt sent ✓",
+        return {"ok": True, "mode": "deeplink", "note": note + model_note + " Prompt sent ✓",
                 "new_session": newest_session_for_repo(repo_path)}
     except subprocess.CalledProcessError as exc:
         err = (exc.stderr or "").strip()
@@ -362,10 +421,11 @@ def new_task(prompt: str, repo_path: str | None = None) -> dict:
                     "auto-send. (Or press Enter in Conductor.)")
         else:
             hint = f"Prompt pre-filled; auto-send failed ({err[:80]}). Press Enter in Conductor."
-        return {"ok": True, "mode": "deeplink", "submitted": False, "note": note + " " + hint}
+        return {"ok": True, "mode": "deeplink", "submitted": False,
+                "note": note + model_note + " " + hint}
     except Exception as exc:  # noqa: BLE001
         return {"ok": True, "mode": "deeplink", "submitted": False,
-                "note": note + f" Auto-send failed: {exc}. Press Enter in Conductor."}
+                "note": note + model_note + f" Auto-send failed: {exc}. Press Enter in Conductor."}
 
 
 def new_task_for_session(session_id: str, prompt: str) -> dict:
