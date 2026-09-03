@@ -31,6 +31,12 @@ from pathlib import Path
 import websockets
 from dotenv import load_dotenv
 
+# Load .env BEFORE importing local modules: auth/conductor/conductor_ui read
+# configuration (SMTP creds, the email allowlist, Conductor paths, calibration
+# coordinates) from the environment at import time.
+load_dotenv()
+
+import auth
 import conductor as cdt
 import conductor_ui as cui
 
@@ -54,8 +60,6 @@ class _NeverRaised(Exception):
 
 _FailSafe = pyautogui.FailSafeException if pyautogui else _NeverRaised
 
-load_dotenv()
-
 # --- Configuration (from environment / .env) ---
 EMAIL_SENDER = os.environ.get("EMAIL_SENDER", "")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD", "")
@@ -68,11 +72,13 @@ PORT = int(os.environ.get("PORT", "8765"))
 MAX_AUTH_ATTEMPTS = int(os.environ.get("MAX_AUTH_ATTEMPTS", "5"))
 COORDINATES_FILE = os.environ.get("COORDINATES_FILE", "coordinates.json")
 
-# Auth code: use a fixed code from the environment if set (so you can connect
-# from far away without seeing the Mac's screen/QR), otherwise generate a fresh
-# random one each start.
+# Legacy shared auth code: a single fixed/random code, delivered via the connect
+# URL. Kept as a fallback so the printed connect URL still works; the primary
+# path is now per-user email sign-in (see auth.py). Disable with
+# AUTH_LEGACY_CODE=0 to require email sign-in for everyone.
 _ENV_CODE = os.environ.get("AUTH_CODE", "").strip()
 AUTH_CODE = _ENV_CODE if _ENV_CODE else f"{random.randint(0, 999999):06d}"
+LEGACY_CODE_ENABLED = os.environ.get("AUTH_LEGACY_CODE", "1").strip().lower() not in ("0", "false", "no")
 
 # Sentinel used to smuggle the post-command working directory back out of the
 # subshell so `cd` persists across commands.
@@ -116,7 +122,7 @@ def send_email_code() -> bool:
 
 
 def deliver_code() -> None:
-    """Email the code if configured, and always print it."""
+    """Email the code if configured, and always print it on the Mac terminal."""
     sent_email = send_email_code()
     if not sent_email:
         print("=" * 52)
@@ -229,19 +235,65 @@ def _is_duplicate_send(sid: str, text: str) -> bool:
     return last is not None and (now - last) < _DUP_WINDOW_S
 
 
+# Last branch we saw per session id, so we can tell the client which chats were
+# renamed between two `CDT:sessions` fetches. Keyed on the STABLE session id.
+_last_branch: dict[str, str] = {}
+
+
+def _branch_changes(items: list[dict]) -> list[dict]:
+    """Sessions whose branch changed since the previous `CDT:sessions` fetch.
+
+    Returns [{"session", "workspace_id", "branch", "previous"}]. The first fetch
+    just seeds the snapshot (returns []), so a fresh connection isn't told that
+    every chat "changed".
+    """
+    seeded = bool(_last_branch)
+    changes: list[dict] = []
+    for s in items:
+        sid = s.get("id")
+        if not sid:
+            continue
+        branch = s.get("branch")
+        prev = _last_branch.get(sid)
+        _last_branch[sid] = branch
+        if seeded and prev is not None and prev != branch:
+            changes.append({"session": sid, "workspace_id": s.get("workspace_id"),
+                            "branch": branch, "previous": prev})
+    return changes
+
+
 async def handle_conductor(message: str) -> str:
     """Handle CDT:* commands, returning a JSON string the web UI parses."""
     rest = message.split("CDT:", 1)[1]
     verb, _, arg = rest.partition(":")
     try:
+        if verb == "models":
+            return json.dumps({"cdt": "models", **cdt.list_models()})
+        if verb == "addrepo":
+            result = await asyncio.to_thread(cdt.add_repo, arg)
+            return json.dumps({"cdt": "repo", **result})
         if verb == "projects":
             return json.dumps({"cdt": "projects", "items": cdt.list_projects()})
         if verb == "sessions":
-            return json.dumps({"cdt": "sessions", "items": cdt.list_sessions()})
+            items = cdt.list_sessions()
+            # Tell the client which chats had their branch renamed since the last
+            # fetch (Conductor renames branches over time). The client keys chats
+            # on the stable id/workspace_id and just refreshes the branch label.
+            return json.dumps({"cdt": "sessions", "items": items,
+                               "changed": _branch_changes(items)})
         if verb == "messages":
+            # Carry the chat's CURRENT identity so a client that already has this
+            # chat open updates its branch/name in place after a rename, instead
+            # of losing track of it. id/workspace_id are stable; the rest is
+            # display only.
+            ident = cdt.session_identity(arg)
             return json.dumps({
                 "cdt": "messages", "session": arg,
-                "title": cdt.session_title(arg),
+                "workspace_id": ident.get("workspace_id"),
+                "title": ident.get("title") or cdt.session_title(arg),
+                "branch": ident.get("branch"),
+                "workspace_name": ident.get("workspace_name"),
+                "directory_name": ident.get("directory_name"),
                 "items": cdt.get_messages(arg),
                 "has_token": bool(cdt.API_TOKEN),
             })
@@ -280,8 +332,23 @@ async def handle_conductor(message: str) -> str:
                         result = fb
             return json.dumps({"cdt": "sent", "session": sid, **result})
         if verb == "newtask":
-            path, _, text = arg.partition(":")
-            result = await asyncio.to_thread(cdt.new_task, text, path or None)
+            # New clients send a JSON payload (so a model/agent/effort can ride
+            # along); older clients send the plain "path:prompt" form.
+            arg_s = arg.strip()
+            if arg_s.startswith("{"):
+                try:
+                    payload = json.loads(arg_s)
+                except Exception:  # noqa: BLE001
+                    return json.dumps({"cdt": "error", "error": "bad newtask payload"})
+                path = payload.get("path") or None
+                text = payload.get("prompt") or ""
+                agent = payload.get("agent") or None
+                model = payload.get("model") or None
+                effort = payload.get("effort") or None
+            else:
+                path, _, text = arg.partition(":")
+                path, agent, model, effort = (path or None), None, None, None
+            result = await asyncio.to_thread(cdt.new_task, text, path, agent, model, effort)
             return json.dumps({"cdt": "sent", **result})
     except Exception as exc:  # noqa: BLE001 - surface any DB/CLI error to the UI
         return json.dumps({"cdt": "error", "error": str(exc)})
@@ -314,6 +381,71 @@ async def execute(message: str, session: dict) -> str:
     return f"Unknown command: {message}"
 
 
+def _auth_json(message: str) -> dict | None:
+    """Parse a message as an {"auth": ...} control object, else None."""
+    if not message or not message.lstrip().startswith("{"):
+        return None
+    try:
+        obj = json.loads(message)
+    except Exception:  # noqa: BLE001
+        return None
+    return obj if isinstance(obj, dict) and obj.get("auth") else None
+
+
+async def _handle_auth(message: str, session: dict) -> tuple[str, bool, bool]:
+    """Process a pre-auth message.
+
+    Returns (reply, authenticated, hard_fail). `hard_fail` means it counts
+    toward the per-connection lockout (wrong code / bad legacy code), as opposed
+    to soft outcomes like "code sent" or an expired token the client can refresh.
+    """
+    obj = _auth_json(message)
+    if obj is not None:
+        verb = obj.get("auth")
+        if verb == "request":
+            res = await asyncio.to_thread(auth.request_code, obj.get("email", ""))
+            if res.get("ok"):
+                reply = {"auth": "code_sent", "email": res.get("email")}
+                if "code" in res:                       # AUTH_DEBUG_CODE only
+                    reply["debug_code"] = res["code"]
+                return json.dumps(reply), False, False
+            return json.dumps({"auth": "error", "code": res.get("code", "error"),
+                               "error": res.get("error", "Couldn't send code.")}), False, False
+        if verb == "verify":
+            res = await asyncio.to_thread(auth.verify_code, obj.get("email", ""), obj.get("code", ""))
+            if res.get("ok"):
+                session.update(authenticated=True, email=res["email"],
+                               session_token=res["session_token"], refresh_token=res["refresh_token"])
+                return json.dumps({"auth": "ok", **{k: res[k] for k in (
+                    "email", "session_token", "refresh_token", "expires_at", "refresh_expires_at")}}), True, False
+            return json.dumps({"auth": "error", "code": res.get("code", "invalid"),
+                               "error": res.get("error", "Wrong code.")}), False, True
+        if verb in ("session", "refresh"):
+            fn = auth.validate_session if verb == "session" else auth.refresh_session
+            res = await asyncio.to_thread(fn, obj.get("token", ""))
+            if res.get("ok"):
+                session["authenticated"] = True
+                session["email"] = res["email"]
+                if verb == "session":
+                    session["session_token"] = obj.get("token", "")
+                    return json.dumps({"auth": "ok", "email": res["email"],
+                                       "expires_at": res.get("expires_at")}), True, False
+                session.update(session_token=res["session_token"], refresh_token=res["refresh_token"])
+                return json.dumps({"auth": "ok", **{k: res[k] for k in (
+                    "email", "session_token", "refresh_token", "expires_at", "refresh_expires_at")}}), True, False
+            # A stale token is not a brute-force attempt — let the client re-auth.
+            return json.dumps({"auth": "error", "code": res.get("code", "invalid"),
+                               "error": res.get("error", "Invalid token.")}), False, False
+        return json.dumps({"auth": "error", "code": "bad_request",
+                           "error": f"Unknown auth verb: {verb}"}), False, False
+
+    # Legacy shared-code fallback (the printed connect URL still works).
+    if LEGACY_CODE_ENABLED and message == AUTH_CODE:
+        session.update(authenticated=True, email="legacy")
+        return "AUTH_SUCCESS", True, False
+    return "AUTH_FAILED", False, True
+
+
 async def handle_client(websocket) -> None:
     peer = getattr(websocket, "remote_address", "?")
     print(f"New device connected from {peer}. Waiting for auth...")
@@ -323,19 +455,28 @@ async def handle_client(websocket) -> None:
     try:
         async for message in websocket:
             if not session["authenticated"]:
-                if message == AUTH_CODE:
-                    session["authenticated"] = True
-                    await websocket.send("AUTH_SUCCESS")
-                    print("Client Authenticated!")
-                else:
+                reply, authed, hard_fail = await _handle_auth(message, session)
+                await websocket.send(reply)
+                if authed:
+                    print(f"Client authenticated ({session.get('email')}).")
+                elif hard_fail:
                     attempts += 1
-                    await websocket.send("AUTH_FAILED")
                     print(f"Bad auth attempt {attempts}/{MAX_AUTH_ATTEMPTS}.")
                     if attempts >= MAX_AUTH_ATTEMPTS:
                         await websocket.send("AUTH_LOCKED")
                         await websocket.close()
                         return
                 continue
+
+            # Authenticated: a logout control message ends the session.
+            obj = _auth_json(message)
+            if obj is not None and obj.get("auth") == "logout":
+                await asyncio.to_thread(auth.logout, session.get("session_token", ""),
+                                        session.get("refresh_token", ""))
+                await websocket.send(json.dumps({"auth": "logged_out"}))
+                await websocket.close()
+                print(f"Client logged out ({session.get('email')}).")
+                return
 
             print(f"Command received: {message}")
             try:
@@ -349,6 +490,8 @@ async def handle_client(websocket) -> None:
 
 
 async def main() -> None:
+    auth.init_db()
+    auth.print_startup_notes()
     deliver_code()
     async with websockets.serve(handle_client, HOST_IP, PORT):
         print(f"WebSocket server running on ws://{HOST_IP}:{PORT}")

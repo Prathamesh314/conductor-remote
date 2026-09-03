@@ -6,8 +6,8 @@ Starts:
   - the WebSocket command server on PORT (default 8765)
   - a static web server for the phone-friendly terminal on WEB_PORT (default 8080)
 
-Then prints your connection URL and the auth code. Open the printed URL on your
-phone (over Tailscale) or Mac, enter the code, and you have a live terminal.
+Then prints a ready-to-open connection URL (with the auth code embedded). Open
+that URL on your phone (over Tailscale) or Mac and you have a live terminal.
 """
 
 from __future__ import annotations
@@ -128,13 +128,15 @@ def start_web_server() -> None:
 
 
 async def main() -> None:
+    srv.auth.init_db()
+    srv.auth.print_startup_notes()
     srv.deliver_code()
     start_web_server()
 
     ts_ip = tailscale_ip()
     lan = lan_ip()
-    # Prefer Tailscale (works anywhere) when connected; QR points at the URL
-    # that is most likely to actually be reachable.
+    # Prefer Tailscale (works anywhere) when connected; the connect URL points
+    # at the address that is most likely to actually be reachable.
     primary = ts_ip or lan
     url = f"http://{primary}:{WEB_PORT}"
 
@@ -155,17 +157,12 @@ async def main() -> None:
     print(f"  (on this Mac:          http://localhost:{WEB_PORT})")
     print(f"\n  AUTH CODE:  {srv.AUTH_CODE}")
 
-    copy_to_clipboard(srv.AUTH_CODE)  # bonus: also on the Mac clipboard
-
-    # The QR embeds the code in the URL hash, so scanning it opens the terminal
-    # already filled in and auto-connecting — no typing/pasting on the phone.
-    qr_url = f"{url}/#{srv.AUTH_CODE}"
-    if shutil.which("qrencode"):
-        print("\n  Scan this with your iPhone camera — it logs in for you:\n")
-        subprocess.run(["qrencode", "-t", "ANSIUTF8", "-m", "2", qr_url])
-    else:
-        print(f"\n  Open on the phone (auto-logs in):  {qr_url}")
-        print("  (Optional: `brew install qrencode` for a scannable QR here.)")
+    # This connect URL embeds the code in the hash, so opening it fills the code
+    # in and auto-connects — just open it (or type it) on the phone, no scanning.
+    connect_url = f"{url}/#{srv.AUTH_CODE}"
+    print("\n  Open this URL on your phone to connect (auto-logs in):")
+    print(f"    ->  {connect_url}")
+    copy_to_clipboard(connect_url)  # also copied to the Mac clipboard
     if srv.pyautogui is None:
         print("\n  [note] pyautogui not loaded — shell commands work, UI")
         print("         clicking (NEW_CHAT/TYPE) is disabled until you")

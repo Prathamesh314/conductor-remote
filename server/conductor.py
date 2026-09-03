@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 import sqlite3
 import subprocess
 import time
@@ -26,9 +28,163 @@ SUBMIT_DELAY = float(os.environ.get("CONDUCTOR_SUBMIT_DELAY", "4"))
 # "enter" (default) or "cmd-enter" if your Conductor sends on ⌘-Enter.
 SUBMIT_KEY = os.environ.get("CONDUCTOR_SUBMIT_KEY", "enter").strip().lower()
 
+# Where "Add repo" clones new GitHub projects on the Mac. Conductor then adds the
+# folder as a project. Defaults next to your other projects' parent if we can
+# guess it, else ~/ConductorProjects.
+PROJECTS_DIR = os.path.expanduser(
+    os.environ.get("CONDUCTOR_PROJECTS_DIR", "~/ConductorProjects"))
+# Seconds to allow a clone before giving up (big repos over slow links).
+CLONE_TIMEOUT = float(os.environ.get("CONDUCTOR_CLONE_TIMEOUT", "600"))
+
 
 def available() -> bool:
     return os.path.exists(DB_PATH)
+
+
+# --- Add a GitHub repo as a local project -----------------------------------
+def _parse_repo_url(raw: str) -> tuple[str | None, str | None, str | None]:
+    """Normalize a user-supplied repo reference.
+
+    Accepts `owner/repo`, `https://github.com/owner/repo[.git]`, or
+    `git@host:owner/repo[.git]`. Returns (clone_target, repo_name, owner_repo)
+    where owner_repo is "owner/repo" for GitHub (so we can use `gh`), else None.
+    Returns (None, None, None) if it doesn't look like a git repo reference.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return None, None, None
+    # owner/repo shorthand (GitHub)
+    if re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", raw):
+        owner_repo = raw[:-4] if raw.endswith(".git") else raw
+        return f"https://github.com/{owner_repo}.git", owner_repo.split("/")[-1], owner_repo
+    # git@host:owner/repo(.git)
+    m = re.fullmatch(r"git@([\w.-]+):(.+?)(?:\.git)?/?", raw)
+    if m:
+        path = m.group(2)
+        owner_repo = path if m.group(1) == "github.com" else None
+        return raw, path.split("/")[-1], owner_repo
+    # http(s)://host/owner/repo(.git)
+    m = re.fullmatch(r"https?://([\w.-]+)/(.+?)(?:\.git)?/?", raw)
+    if m:
+        path = m.group(2)
+        owner_repo = path if m.group(1).endswith("github.com") else None
+        return raw, path.split("/")[-1], owner_repo
+    return None, None, None
+
+
+def add_repo(raw_url: str) -> dict:
+    """Clone a GitHub repo onto the Mac so it can be added as a Conductor project.
+
+    Private repos work when the `gh` CLI is logged in (preferred) or git has
+    stored credentials. Returns {"ok", "path", "name", "note"} on success, or
+    {"ok": False, "error": ...}. Conductor has no local "add repo" API, so after
+    cloning we bring Conductor to the front for the one-tap "add project" step.
+    """
+    target, name, owner_repo = _parse_repo_url(raw_url)
+    if not target:
+        return {"ok": False, "error": "That doesn't look like a GitHub URL or owner/repo."}
+    name = re.sub(r"[^A-Za-z0-9._-]", "", name or "").lstrip(".") or "repo"
+    if name in (".", ".."):
+        name = "repo"
+
+    dest = os.path.join(PROJECTS_DIR, name)
+    if os.path.exists(dest):
+        if os.path.isdir(os.path.join(dest, ".git")):
+            _bring_conductor_forward()
+            return {"ok": True, "path": dest, "name": name, "already": True,
+                    "note": f"'{name}' is already cloned at {dest}. Add it in "
+                            "Conductor: New project → choose this folder."}
+        return {"ok": False, "error": f"{dest} already exists and isn't a git repo."}
+
+    try:
+        os.makedirs(PROJECTS_DIR, exist_ok=True)
+    except OSError as exc:
+        return {"ok": False, "error": f"Can't create {PROJECTS_DIR}: {exc}"}
+
+    # Prefer `gh repo clone` (uses your GitHub login → private repos just work).
+    if owner_repo and shutil.which("gh"):
+        cmd = ["gh", "repo", "clone", owner_repo, dest]
+    else:
+        cmd = ["git", "clone", target, dest]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True,
+                             timeout=CLONE_TIMEOUT, env=os.environ)
+    except subprocess.TimeoutExpired:
+        _rmtree_quiet(dest)
+        return {"ok": False, "error": f"Clone timed out after {int(CLONE_TIMEOUT)}s."}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"Clone failed to start: {exc}"}
+
+    if res.returncode != 0:
+        _rmtree_quiet(dest)   # don't leave a half-clone behind
+        err = (res.stderr or res.stdout or "").strip().splitlines()
+        msg = err[-1] if err else "unknown error"
+        if "already exists" in msg:
+            msg = "destination already exists."
+        elif "Repository not found" in msg or "not found" in msg.lower():
+            msg = "repository not found (private? check `gh auth login` on the Mac)."
+        elif "Authentication" in msg or "could not read Username" in msg:
+            msg = "authentication needed — run `gh auth login` on the Mac."
+        return {"ok": False, "error": f"Clone failed: {msg}"}
+
+    _bring_conductor_forward()
+    return {"ok": True, "path": dest, "name": name,
+            "note": f"Cloned {name} to {dest}. Add it in Conductor: "
+                    "New project → choose this folder."}
+
+
+def _rmtree_quiet(path: str) -> None:
+    try:
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+    except OSError:
+        pass
+
+
+def _bring_conductor_forward() -> None:
+    """Best-effort: make sure Conductor is open so the user can add the project."""
+    try:
+        import conductor_ui as _cui
+        _cui.ensure_conductor()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def list_models() -> dict:
+    """Available agents and their model ids / effort levels / defaults.
+
+    Reads `conductor models --json` (works without a token). Returns a normalized
+    shape the phone can render a picker from:
+
+        {"agents": [{"agent": "claude", "models": [...], "efforts": [...],
+                     "default_model": "sonnet", "default_effort": "high",
+                     "fast_mode_models": [...]}],
+         "cloud": <bool>}   # whether picking a model actually creates a cloud task
+
+    On any failure returns {"agents": [], "error": "..."}.
+    """
+    if not os.path.exists(CLI_PATH):
+        return {"agents": [], "error": "Conductor CLI not found — is Conductor installed?"}
+    try:
+        res = subprocess.run([CLI_PATH, "--json", "models"],
+                             capture_output=True, text=True, timeout=20)
+        if res.returncode != 0:
+            return {"agents": [], "error": (res.stderr or res.stdout).strip()[:300]}
+        raw = json.loads(res.stdout or "{}")
+    except Exception as exc:  # noqa: BLE001 - CLI missing / bad JSON
+        return {"agents": [], "error": str(exc)}
+
+    agents = []
+    for a in raw.get("agents", []):
+        agents.append({
+            "agent": a.get("agent"),
+            "models": a.get("models", []),
+            "efforts": a.get("efforts", []),
+            "default_model": a.get("defaultModel"),
+            "default_effort": a.get("defaultEffort"),
+            "fast_mode_models": a.get("fastModeModels", []),
+        })
+    return {"agents": agents}
 
 
 def _connect() -> sqlite3.Connection:
@@ -82,13 +238,13 @@ def list_sessions() -> list[dict]:
     with _connect() as c:
         rows = c.execute(
             """
-            SELECT id, title, status, unread, updated_at, model,
-                   workspace_name, branch, project, project_id
+            SELECT id, workspace_id, title, status, unread, updated_at, model,
+                   workspace_name, directory_name, branch, project, project_id
             FROM (
-                SELECT s.id, s.title, s.status,
+                SELECT s.id, s.workspace_id, s.title, s.status,
                        COALESCE(s.unread_count,0) AS unread,
                        s.updated_at, s.model,
-                       w.workspace_name, w.branch,
+                       w.workspace_name, w.directory_name, w.branch,
                        r.name AS project, r.id AS project_id,
                        ROW_NUMBER() OVER (
                            PARTITION BY COALESCE(s.workspace_id, s.id)
@@ -255,6 +411,37 @@ def session_title(session_id: str) -> str:
     return (row["title"] if row else None) or "Chat"
 
 
+def session_identity(session_id: str) -> dict:
+    """The chat's *current* labels keyed to its stable id, so the client can
+    refresh a chat it already has open when Conductor renames the branch.
+
+    `id` and `workspace_id` never change; `branch`, `workspace_name`, `title`
+    and `directory_name` may. The client should key on `id`/`workspace_id` and
+    only use the rest for display — never as an identifier.
+    """
+    with _connect() as c:
+        row = c.execute(
+            """
+            SELECT s.id, s.workspace_id, s.title,
+                   w.branch, w.workspace_name, w.directory_name
+            FROM sessions s
+            LEFT JOIN workspaces w ON s.workspace_id = w.id
+            WHERE s.id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+    if not row:
+        return {"id": session_id}
+    return {
+        "id": row["id"],
+        "workspace_id": row["workspace_id"],
+        "title": row["title"],
+        "branch": row["branch"],
+        "workspace_name": row["workspace_name"],
+        "directory_name": row["directory_name"],
+    }
+
+
 def session_search_terms(session_id: str) -> list[str]:
     """Candidate strings to look for on screen when locating this chat.
 
@@ -266,7 +453,9 @@ def session_search_terms(session_id: str) -> list[str]:
         row = c.execute(
             """
             SELECT s.title, w.directory_name, w.workspace_name,
-                   w.branch, w.DEPRECATED_city_name AS city
+                   w.user_set_workspace_name, w.user_set_branch_name,
+                   w.placeholder_branch_name, w.branch,
+                   w.DEPRECATED_city_name AS city
             FROM sessions s
             LEFT JOIN workspaces w ON s.workspace_id = w.id
             WHERE s.id = ?
@@ -277,7 +466,12 @@ def session_search_terms(session_id: str) -> list[str]:
     terms: list[str] = []
     if row:
         branch = row["branch"]
-        for v in (row["directory_name"], row["workspace_name"], row["city"],
+        # directory_name is the STABLE city label Conductor shows and doesn't
+        # rename, so it leads. The others cover whatever the sidebar currently
+        # displays after a rename (user-set names, the live branch, its tail).
+        for v in (row["directory_name"], row["workspace_name"],
+                  row["user_set_workspace_name"], row["user_set_branch_name"],
+                  row["placeholder_branch_name"], row["city"],
                   branch, row["title"]):
             if v:
                 terms.append(v)
@@ -316,13 +510,29 @@ def _submit_keystroke() -> None:
                    capture_output=True, text=True)
 
 
-def new_task(prompt: str, repo_path: str | None = None) -> dict:
+def new_task(prompt: str, repo_path: str | None = None,
+             agent: str | None = None, model: str | None = None,
+             effort: str | None = None) -> dict:
     """Create a new Conductor task/workspace with a prompt (FREE, no token).
 
     Uses the official conductor:// deep link, opened via `open`. The deep link
-    only *pre-fills* the prompt, so (if AUTO_SUBMIT) we then press the send key
-    to actually start the agent.
+    only *pre-fills* the prompt (it can't carry a model), so — if a `model` was
+    picked — we set it in the composer via UI automation before pressing send.
+    (if AUTO_SUBMIT) we then press the send key to actually start the agent.
     """
+    try:
+        import conductor_ui as _cui
+    except Exception:  # noqa: BLE001
+        _cui = None
+
+    # If Conductor is closed, launch it (full screen) first so the deep link
+    # lands in a ready app instead of racing its cold start.
+    try:
+        if _cui and not _cui.conductor_running():
+            _cui.ensure_conductor()
+    except Exception:  # noqa: BLE001 - never block task creation on this
+        pass
+
     url = deeplink_url(prompt, repo_path)
     try:
         subprocess.run(["open", url], check=True, timeout=10)
@@ -332,18 +542,33 @@ def new_task(prompt: str, repo_path: str | None = None) -> dict:
     where = repo_path or "the first available repo"
     note = f"Started a new Conductor task in {where}."
 
+    def _settle_and_apply_model(settle: float) -> str:
+        """Wait for the composer, then (if a model was picked) select it in the
+        Conductor UI. Returns a short note describing the outcome."""
+        time.sleep(settle)                 # also the pre-submit settle wait
+        if not model:
+            return ""
+        if not _cui:
+            return f" (Wanted {model}; UI automation unavailable.)"
+        try:
+            sel = _cui.select_model(model, agent)
+        except Exception as exc:  # noqa: BLE001
+            return f" (Couldn't set model {model}: {exc}.)"
+        return (f" Model: {model}." if sel.get("ok")
+                else f" (Wanted {model}: {sel.get('error', 'not found')}.)")
+
     if not AUTO_SUBMIT:
         # Give Conductor a moment to create the workspace, then hand back the
         # new session id so the phone can jump straight into it.
-        time.sleep(min(SUBMIT_DELAY, 3))
+        model_note = _settle_and_apply_model(min(SUBMIT_DELAY, 3))
         return {"ok": True, "mode": "deeplink",
-                "note": note + " Prompt pre-filled — press Enter in Conductor to send.",
+                "note": note + model_note + " Prompt pre-filled — press Enter in Conductor to send.",
                 "new_session": newest_session_for_repo(repo_path)}
 
-    time.sleep(SUBMIT_DELAY)
+    model_note = _settle_and_apply_model(SUBMIT_DELAY)
     try:
         _submit_keystroke()
-        return {"ok": True, "mode": "deeplink", "note": note + " Prompt sent ✓",
+        return {"ok": True, "mode": "deeplink", "note": note + model_note + " Prompt sent ✓",
                 "new_session": newest_session_for_repo(repo_path)}
     except subprocess.CalledProcessError as exc:
         err = (exc.stderr or "").strip()
@@ -353,10 +578,11 @@ def new_task(prompt: str, repo_path: str | None = None) -> dict:
                     "auto-send. (Or press Enter in Conductor.)")
         else:
             hint = f"Prompt pre-filled; auto-send failed ({err[:80]}). Press Enter in Conductor."
-        return {"ok": True, "mode": "deeplink", "submitted": False, "note": note + " " + hint}
+        return {"ok": True, "mode": "deeplink", "submitted": False,
+                "note": note + model_note + " " + hint}
     except Exception as exc:  # noqa: BLE001
         return {"ok": True, "mode": "deeplink", "submitted": False,
-                "note": note + f" Auto-send failed: {exc}. Press Enter in Conductor."}
+                "note": note + model_note + f" Auto-send failed: {exc}. Press Enter in Conductor."}
 
 
 def new_task_for_session(session_id: str, prompt: str) -> dict:

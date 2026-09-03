@@ -345,6 +345,33 @@
     box-shadow: 0 10px 20px rgba(21, 111, 112, .24);
   }
 
+  /* Bottom toast: a subtle dark pill for non-blocking status (e.g. cloning). */
+  #cdtToast {
+    position: absolute;
+    left: 50%;
+    bottom: calc(78px + env(safe-area-inset-bottom));
+    z-index: 20;
+    transform: translateX(-50%);
+    max-width: calc(100% - 32px);
+    padding: 11px 16px;
+    border-radius: 999px;
+    background: rgba(11, 20, 26, .94);
+    color: #e9edef;
+    border: 1px solid var(--cdt-line);
+    box-shadow: var(--cdt-shadow);
+    font-size: 13px;
+    font-weight: 650;
+    line-height: 1.4;
+    text-align: center;
+    overflow-wrap: anywhere;
+    animation: cdt-rise .24s ease both;
+  }
+  #cdtToast.err {
+    background: rgba(229, 72, 77, .96);
+    border-color: transparent;
+    color: #fff;
+  }
+
   #cdtMessages {
     display: flex;
     flex-direction: column;
@@ -655,8 +682,17 @@
 <div id="connectView" class="connect">
   <h1>Mac Remote Terminal</h1>
   <input id="host" placeholder="Mac IP (100.x.x.x or localhost)" autocapitalize="off" autocomplete="off" />
-  <input id="code" placeholder="Auth code from email" inputmode="numeric" />
-  <button id="connectBtn">Connect</button>
+  <!-- Step 1: get a one-time login code emailed to you. -->
+  <div id="emailStep" style="display:flex;flex-direction:column;gap:12px">
+    <input id="email" type="email" placeholder="you@example.com" inputmode="email" autocapitalize="off" autocomplete="email" />
+    <button id="sendCodeBtn">Send code</button>
+  </div>
+  <!-- Step 2: enter the 6-digit code we emailed you. -->
+  <div id="codeStep" class="hidden" style="display:flex;flex-direction:column;gap:12px">
+    <input id="code" placeholder="6-digit code" inputmode="numeric" autocomplete="one-time-code" />
+    <button id="verifyBtn">Verify</button>
+    <button id="resendBtn" style="background:transparent;color:var(--muted);border:1px solid var(--border)">Resend code</button>
+  </div>
   <div id="connectStatus" class="sys" style="font-size:12px;color:var(--muted)"></div>
 </div>
 
@@ -669,6 +705,7 @@
     <button id="conductorBtn">🎛 Conductor</button>
     <button id="awakeBtn">☕ Awake: off</button>
     <button id="disconnectBtn">Disconnect</button>
+    <button id="logoutBtn">Log out</button>
   </header>
   <div class="quickbar">
     <button data-send="CMD:ls -la">ls -la</button>
@@ -691,6 +728,7 @@
     <button id="cdtBack">‹ Terminal</button>
     <span class="title" id="cdtTitle">Projects</span>
     <span class="spacer"></span>
+    <button id="cdtAddRepo" title="Add a GitHub repo">＋ Repo</button>
     <button id="cdtRefresh" title="Refresh">↻</button>
   </header>
   <div id="cdtOffline" class="cdt-offline hidden">
@@ -723,6 +761,8 @@
       <h2>New Task</h2>
       <div class="hint">Which project?</div>
       <div id="cdtChips" class="chips"></div>
+      <div class="hint">Model</div>
+      <div id="cdtModelChips" class="chips"></div>
       <div class="hint">What should the agent do?</div>
       <textarea id="cdtPrompt" placeholder="e.g. Add a /health endpoint and a test for it."></textarea>
       <div class="actions">
@@ -732,6 +772,9 @@
       <div id="cdtCreateStatus" class="sys" style="font-size:12px;color:var(--muted);margin-top:10px"></div>
     </div>
   </div>
+
+  <!-- Lightweight toast (e.g. "Cloning …", repo-added result) -->
+  <div id="cdtToast" class="hidden"></div>
 </div>
 
 <script>
@@ -772,20 +815,31 @@ const servedHost = location.hostname && location.hostname !== ""
   ? location.hostname : "";
 $("host").value = servedHost || localStorage.getItem("mrt.host") || "";
 
-// Prefill the code: a code in the URL hash (from the scanned QR) wins;
-// otherwise reuse the last code that worked. Then, if we have both a host and
-// a code, auto-connect — so from anywhere you just open the page and you're in.
-// (The hash is client-side only and is never sent to a server.)
-let hashCode = location.hash.slice(1);
-if (hashCode.startsWith("code=")) hashCode = hashCode.slice(5);
-const initialCode = /^\d{4,8}$/.test(hashCode)
-  ? hashCode
-  : (localStorage.getItem("mrt.code") || "");
-if (initialCode) $("code").value = initialCode;
-if ($("host").value && initialCode) {
-  // Small delay so the socket/DOM are ready, then connect on its own.
-  setTimeout(() => connect(), 200);
+// --- Auth token persistence (keeps you signed in for days) ---
+// localStorage keys: mrt.session_token, mrt.refresh_token, mrt.email,
+// mrt.expires_at (plus the existing mrt.host). Tokens survive reloads, so a
+// returning visitor resumes silently instead of asking for a code again.
+function sessionToken() { return localStorage.getItem("mrt.session_token") || ""; }
+function refreshToken() { return localStorage.getItem("mrt.refresh_token") || ""; }
+function saveTokens(o) {
+  // Only overwrite what the server actually sent: a "session" resume returns
+  // just email/expires_at, so the stored tokens must stay untouched.
+  if (o.session_token) localStorage.setItem("mrt.session_token", o.session_token);
+  if (o.refresh_token) localStorage.setItem("mrt.refresh_token", o.refresh_token);
+  if (o.email) localStorage.setItem("mrt.email", o.email);
+  if (o.expires_at) localStorage.setItem("mrt.expires_at", o.expires_at);
 }
+function clearTokens() {
+  for (const k of ["mrt.session_token", "mrt.refresh_token", "mrt.email", "mrt.expires_at"])
+    localStorage.removeItem(k);
+}
+
+// Auth handshake state. authMode names the in-flight attempt so a pre-auth
+// reply can react (e.g. auto-refresh an expired session). pendingLegacyCode
+// holds a URL-hash code for the legacy bare-code login path.
+let authMode = null;   // "request" | "verify" | "session" | "refresh" | "legacy"
+let pendingLegacyCode = "";
+let loggingOut = false;
 
 function print(text, cls) {
   const div = document.createElement("div");
@@ -806,13 +860,16 @@ function setConnected(on) {
   $("cdtReconnect").disabled = false;
 }
 
-function connect() {
+// Open the socket, then run the auth handshake for the given mode. The socket
+// stays open across the pre-auth control exchange (request → verify, session →
+// refresh); once authenticated the post-auth message routing is unchanged.
+function openSocket(mode) {
+  authMode = mode;
   const resumeConductor = !$("conductorView").classList.contains("hidden");
   const host = $("host").value.trim();
-  const code = $("code").value.trim();
-  if (!host || !code) {
-    $("connectStatus").textContent = "Enter host and code.";
-    if (resumeConductor) $("cdtOfflineText").textContent = "Enter host and auth code on the Connect screen.";
+  if (!host) {
+    $("connectStatus").textContent = "Enter the Mac IP.";
+    if (resumeConductor) $("cdtOfflineText").textContent = "Enter the Mac IP on the Connect screen.";
     return;
   }
   localStorage.setItem("mrt.host", host);
@@ -835,31 +892,43 @@ function connect() {
 
   let authed = false;
 
-  ws.onopen = () => { ws.send(code); };
+  ws.onopen = () => { sendAuth(authMode); };
   ws.onmessage = (ev) => {
     const msg = ev.data;
     if (!authed) {
+      // New JSON auth protocol: {auth:...} control replies.
+      let obj = null;
+      if (typeof msg === "string" && msg.charAt(0) === "{") {
+        try { obj = JSON.parse(msg); } catch (e) {}
+      }
+      if (obj && obj.auth) {
+        if (obj.auth === "code_sent") {
+          showCodeStep(obj.debug_code);
+        } else if (obj.auth === "ok") {
+          authed = true;
+          saveTokens(obj);   // verify/refresh carry tokens; session refreshes email/expiry
+          enterApp(host, resumeConductor);
+        } else if (obj.auth === "error") {
+          // An expired session can still be rescued by a refresh on this socket.
+          if (authMode === "session" && obj.code === "expired" && refreshToken()) {
+            authMode = "refresh";
+            ws.send(JSON.stringify({ auth: "refresh", token: refreshToken() }));
+          } else if (authMode === "session" || authMode === "refresh") {
+            clearTokens();            // saved login is dead → back to sign-in
+            showSignIn("Session expired. Sign in again.");
+          } else {
+            showAuthError(obj, resumeConductor);
+          }
+        } else if (obj.auth === "logged_out") {
+          finishLogout();
+        }
+        return;
+      }
+      // Legacy plain-text auth path (bare numeric code / URL-hash auto-login).
       if (msg === "AUTH_SUCCESS") {
         authed = true;
-        $("connectView").classList.add("hidden");
-        if (resumeConductor) {
-          showConductor(true);
-        } else {
-          $("termView").classList.remove("hidden");
-          $("conductorView").classList.add("hidden");
-          $("cmd").focus();
-        }
-        setConnected(true);
-        localStorage.setItem("mrt.code", code);  // remember for next time
-        print("Authenticated. Connected to " + host, "sys");
-        ws.send("AWAKE_STATUS");   // sync the keep-awake toggle
-        if (resumeConductor) {
-          if (cdtLevel === "chat" && cdtCurrentSession) {
-            sendRaw("CDT:messages:" + cdtCurrentSession);
-          } else {
-            loadConductor();
-          }
-        }
+        if (pendingLegacyCode) localStorage.setItem("mrt.code", pendingLegacyCode);
+        enterApp(host, resumeConductor);
       } else if (msg === "AUTH_FAILED") {
         $("connectStatus").textContent = "Wrong code — try again.";
         if (resumeConductor) {
@@ -877,6 +946,7 @@ function connect() {
       }
       return;
     }
+    // ---- authenticated: existing post-auth routing (unchanged) ----
     if (msg === "AWAKE_ON" || msg === "AWAKE_OFF") {
       setAwakeUI(msg === "AWAKE_ON");
       return;
@@ -884,6 +954,7 @@ function connect() {
     if (msg && msg.charAt(0) === "{") {
       let obj = null;
       try { obj = JSON.parse(msg); } catch (e) {}
+      if (obj && obj.auth === "logged_out") { finishLogout(); return; }
       if (obj && obj.cdt) { handleConductor(obj); return; }
     }
     print(msg);
@@ -894,13 +965,168 @@ function connect() {
     setConnected(false);
   };
   ws.onclose = () => {
+    if (loggingOut) { finishLogout(); return; }   // logout closed the socket
     setConnected(false);
     if (authed) print("— disconnected —", "sys");
   };
 }
 
+// Send the opening auth message for the given handshake mode.
+function sendAuth(mode) {
+  if (mode === "request") {
+    ws.send(JSON.stringify({ auth: "request", email: $("email").value.trim() }));
+  } else if (mode === "verify") {
+    ws.send(JSON.stringify({ auth: "verify", email: $("email").value.trim(), code: $("code").value.trim() }));
+  } else if (mode === "session") {
+    ws.send(JSON.stringify({ auth: "session", token: sessionToken() }));
+  } else if (mode === "refresh") {
+    ws.send(JSON.stringify({ auth: "refresh", token: refreshToken() }));
+  } else if (mode === "legacy") {
+    ws.send(pendingLegacyCode);   // bare code → legacy AUTH_SUCCESS path
+  }
+}
+
+// Shared "we're authenticated now" transition for both the email and legacy
+// paths. Everything past this point is the original post-auth behavior.
+function enterApp(host, resumeConductor) {
+  $("connectView").classList.add("hidden");
+  if (resumeConductor) {
+    showConductor(true);
+  } else {
+    $("termView").classList.remove("hidden");
+    $("conductorView").classList.add("hidden");
+    $("cmd").focus();
+  }
+  setConnected(true);
+  print("Authenticated. Connected to " + host, "sys");
+  ws.send("AWAKE_STATUS");   // sync the keep-awake toggle
+  if (resumeConductor) {
+    if (cdtLevel === "chat" && cdtCurrentSession) {
+      sendRaw("CDT:messages:" + cdtCurrentSession);
+    } else {
+      loadConductor();
+    }
+  }
+}
+
+// Show a server-provided auth error inline (textContent keeps it XSS-safe).
+function showAuthError(obj, resumeConductor) {
+  const text = obj.error || "Sign-in failed.";
+  $("connectStatus").textContent = text;
+  if (resumeConductor) {
+    $("cdtOfflineText").textContent = text;
+    $("cdtReconnect").textContent = "Connect";
+    $("cdtReconnect").disabled = false;
+  }
+}
+
+// ---- Email sign-in UI (two steps) ----
+// Return to step 1 (email) and hide the app. Optional inline status note.
+function showSignIn(message) {
+  $("termView").classList.add("hidden");
+  $("conductorView").classList.add("hidden");
+  $("connectView").classList.remove("hidden");
+  $("codeStep").classList.add("hidden");
+  $("emailStep").classList.remove("hidden");
+  const savedEmail = localStorage.getItem("mrt.email");
+  if (savedEmail && !$("email").value) $("email").value = savedEmail;
+  $("connectStatus").textContent = message || "";
+}
+
+// Advance to step 2. A server debug_code prefills the field for local testing.
+function showCodeStep(debugCode) {
+  $("emailStep").classList.add("hidden");
+  $("codeStep").classList.remove("hidden");
+  $("connectStatus").textContent = "Code sent — check your email.";
+  if (debugCode) $("code").value = String(debugCode);
+  $("code").focus();
+}
+
+// Step 1 action: email a login code (opens the socket if needed, else reuses it).
+function requestCode() {
+  const host = $("host").value.trim();
+  const email = $("email").value.trim();
+  if (!host) { $("connectStatus").textContent = "Enter the Mac IP."; return; }
+  if (!email) { $("connectStatus").textContent = "Enter your email."; return; }
+  localStorage.setItem("mrt.host", host);
+  localStorage.setItem("mrt.email", email);
+  $("connectStatus").textContent = "Sending code…";
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    authMode = "request";
+    ws.send(JSON.stringify({ auth: "request", email }));
+  } else {
+    openSocket("request");
+  }
+}
+
+// Step 2 action: verify the 6-digit code on the open pre-auth socket.
+function verifyCode() {
+  const code = $("code").value.trim();
+  if (!code) { $("connectStatus").textContent = "Enter the 6-digit code."; return; }
+  $("connectStatus").textContent = "Verifying…";
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    authMode = "verify";
+    ws.send(JSON.stringify({ auth: "verify", email: $("email").value.trim(), code }));
+  } else {
+    openSocket("verify");   // socket dropped between steps → reopen and verify
+  }
+}
+
+// Silently resume a dropped connection using the saved session token.
+function reconnect() {
+  if (ws && ws.readyState === WebSocket.OPEN) return;
+  if (sessionToken()) openSocket("session");
+  else showSignIn("Sign in to reconnect.");
+}
+
+// Tear down the session: clear tokens, drop the socket, return to sign-in.
+function finishLogout() {
+  loggingOut = false;
+  clearTokens();
+  try { if (ws) ws.close(); } catch (e) {}
+  showSignIn("");
+}
+
+// --- Auto-resume on load ---
+// 1) A saved session → resume silently.  2) else a numeric URL-hash code →
+// legacy login.  3) else show the email sign-in screen.
+(function bootstrap() {
+  const savedEmail = localStorage.getItem("mrt.email");
+  if (savedEmail) $("email").value = savedEmail;
+
+  if (sessionToken() && $("host").value) {
+    $("connectStatus").textContent = "Resuming session…";
+    setTimeout(() => openSocket("session"), 200);
+    return;
+  }
+
+  // Legacy: a code in the URL hash (from an old connect URL). The hash is
+  // client-side only and is never sent to any server.
+  let hashCode = location.hash.slice(1);
+  if (hashCode.startsWith("code=")) hashCode = hashCode.slice(5);
+  if (/^\d{4,8}$/.test(hashCode) && $("host").value) {
+    pendingLegacyCode = hashCode;
+    setTimeout(() => openSocket("legacy"), 200);
+    return;
+  }
+
+  showSignIn("");
+})();
+
 function sendRaw(v) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(v);
+}
+
+// Non-blocking bottom toast. kind: undefined (neutral pill) | "err" (reddish).
+// textContent keeps server-provided strings XSS-safe; auto-hides after ~4s.
+let cdtToastTimer = null;
+function showToast(msg, kind) {
+  const el = $("cdtToast");
+  el.textContent = msg || "";
+  el.classList.remove("hidden", "err");
+  if (kind === "err") el.classList.add("err");
+  if (cdtToastTimer) clearTimeout(cdtToastTimer);
+  cdtToastTimer = setTimeout(() => el.classList.add("hidden"), 4000);
 }
 
 function setAwakeUI(on) {
@@ -923,13 +1149,21 @@ function send(raw) {
 }
 
 // Wiring
-$("connectBtn").onclick = connect;
-$("code").addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
+$("sendCodeBtn").onclick = requestCode;
+$("email").addEventListener("keydown", (e) => { if (e.key === "Enter") requestCode(); });
+$("verifyBtn").onclick = verifyCode;
+$("resendBtn").onclick = requestCode;
+$("code").addEventListener("keydown", (e) => { if (e.key === "Enter") verifyCode(); });
+$("logoutBtn").onclick = () => {
+  loggingOut = true;
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ auth: "logout" }));
+  else finishLogout();
+};
 $("disconnectBtn").onclick = () => {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.close();            // live → drop the connection (onclose flips the label)
   } else {
-    connect();             // dropped → reconnect to the Mac
+    reconnect();           // dropped → resume via the saved session token
   }
 };
 $("cmd").addEventListener("keydown", (e) => {
@@ -955,6 +1189,9 @@ let cdtCurrentProject = null;     // {id, name, root_path}
 let cdtCurrentSession = null;
 let cdtComposeProject = null;
 let cdtHasToken = false;          // does the server have a Conductor API token?
+let cdtModelsData = [];           // [{agent, models:[…], default_model, …}] from the server
+let cdtSelModel = null;           // selected model id
+let cdtSelAgent = null;           // agent that owns the selected model
 
 function showConductor(on) {
   $("termView").classList.toggle("hidden", on);
@@ -1019,13 +1256,29 @@ function statusBadge(s) {
   return `<span class="badge">${s.status || "idle"}</span>`;
 }
 
+// Most recent chat activity in a project, as a sortable epoch (0 = no chats).
+function projectLastActivity(projectId) {
+  let newest = 0;
+  for (const s of sessionsFor(projectId)) {
+    const t = Date.parse((s.updated_at || "").replace(" ", "T") + "Z");
+    if (!isNaN(t) && t > newest) newest = t;
+  }
+  return newest;
+}
+
 function renderProjects() {
   const box = $("cdtProjects");
   if (!cdtProjectsData.length) { box.innerHTML = '<div class="empty">No projects found.</div>'; return; }
   box.innerHTML = "";
   const wrap = document.createElement("div");
   wrap.className = "cdt-scroll";
-  for (const p of cdtProjectsData) {
+  // Active projects first: sort by most recent chat, newest at the top.
+  // Ties (and chat-less projects) keep Conductor's original display order.
+  const ordered = cdtProjectsData
+    .map((p, i) => ({ p, i, last: projectLastActivity(p.id) }))
+    .sort((a, b) => b.last - a.last || a.i - b.i)
+    .map((e) => e.p);
+  for (const p of ordered) {
     const sess = sessionsFor(p.id);
     const working = sess.filter((s) => s.status === "working").length;
     const card = document.createElement("div");
@@ -1065,10 +1318,12 @@ function renderChats() {
     const card = document.createElement("div");
     card.className = "card";
     // Conductor labels an untitled/empty chat by its workspace, not "Untitled".
+    // Prefer the STABLE workspace/directory name over the branch tail so the
+    // label doesn't change when Conductor renames the branch.
     const branchTail = (s.branch || "").split("/").pop();
     const name = (s.title && s.title !== "Untitled")
       ? s.title
-      : (s.workspace_name || branchTail || "Untitled");
+      : (s.workspace_name || s.directory_name || branchTail || "Untitled");
     const sub = [s.branch || s.workspace_name || "", relTime(s.updated_at)].filter(Boolean).join(" · ");
     card.innerHTML =
       `<div class="body"><div class="title2"></div><div class="sub"></div></div>` +
@@ -1317,10 +1572,34 @@ function openSheet() {
     };
     chips.appendChild(c);
   }
+  // Ask the server for the model list the first time; the reply re-renders us.
+  if (!cdtModelsData.length) sendRaw("CDT:models");
+  renderModelChips();
   $("cdtPrompt").value = "";
   $("cdtCreateStatus").textContent = "";
   $("cdtSheet").classList.remove("hidden");
   $("cdtPrompt").focus();
+}
+
+// Fill the Model chips: one .chip per model, across every agent. The selected
+// one gets .sel; tapping a chip records its model id + owning agent.
+function renderModelChips() {
+  const chips = $("cdtModelChips");
+  chips.innerHTML = "";
+  for (const a of cdtModelsData) {
+    for (const model of (a.models || [])) {
+      const c = document.createElement("div");
+      c.className = "chip" + (model === cdtSelModel && a.agent === cdtSelAgent ? " sel" : "");
+      c.textContent = model;
+      c.onclick = () => {
+        cdtSelModel = model;
+        cdtSelAgent = a.agent;
+        [...chips.children].forEach((x) => x.classList.remove("sel"));
+        c.classList.add("sel");
+      };
+      chips.appendChild(c);
+    }
+  }
 }
 
 function closeSheet() { $("cdtSheet").classList.add("hidden"); }
@@ -1329,13 +1608,26 @@ function createTask() {
   const prompt = $("cdtPrompt").value.trim();
   if (!prompt) { $("cdtCreateStatus").textContent = "Type what the agent should do."; return; }
   const path = cdtComposeProject ? (cdtComposeProject.root_path || "") : "";
-  sendRaw("CDT:newtask:" + path + ":" + prompt);
+  const payload = { path: path, prompt: prompt, agent: cdtSelAgent, model: cdtSelModel };
+  sendRaw("CDT:newtask:" + JSON.stringify(payload));
   $("cdtCreateStatus").textContent = "Creating task…";
 }
 
 function sheetOpen() { return !$("cdtSheet").classList.contains("hidden"); }
 
 function handleConductor(obj) {
+  if (obj.cdt === "models") {
+    cdtModelsData = obj.agents || [];
+    // Default to the "claude" agent's default model, else the first agent's
+    // default, else just the first model we were given.
+    let pick = cdtModelsData.find((a) => a.agent === "claude") || cdtModelsData[0];
+    if (pick) {
+      cdtSelAgent = pick.agent;
+      cdtSelModel = pick.default_model || (pick.models && pick.models[0]) || null;
+    }
+    if (sheetOpen()) renderModelChips();
+    return;
+  }
   if (obj.cdt === "projects") {
     cdtProjectsData = obj.items || [];
     if (cdtLevel === "projects") renderProjects();
@@ -1351,6 +1643,16 @@ function handleConductor(obj) {
     cdtHasToken = !!obj.has_token;
     // Keep the header title in sync (e.g. once a new task gets named).
     if (obj.session === cdtCurrentSession && obj.title) $("cdtTitle").textContent = obj.title;
+    // A chat we already have open carries its CURRENT branch/name — refresh the
+    // cached row in place (keyed on the stable session id) so a Conductor branch
+    // rename updates the label instead of orphaning the chat.
+    const cached = cdtSessionsData.find((s) => s.id === obj.session);
+    if (cached) {
+      if (obj.branch != null) cached.branch = obj.branch;
+      if (obj.title != null) cached.title = obj.title;
+      if (obj.workspace_name != null) cached.workspace_name = obj.workspace_name;
+      if (obj.directory_name != null) cached.directory_name = obj.directory_name;
+    }
     updateComposerMode();
     return renderMessages(obj.session, obj.items || []);
   }
@@ -1390,6 +1692,11 @@ function handleConductor(obj) {
     }
     return;
   }
+  if (obj.cdt === "repo") {
+    if (obj.ok) { showToast(obj.note || "Repo cloned ✓"); loadConductor(); }
+    else { showToast(obj.error || "Couldn't add repo", "err"); }
+    return;
+  }
   if (obj.cdt === "error") {
     if (sheetOpen()) $("cdtCreateStatus").textContent = "Error: " + obj.error;
     else setSendStatus(obj.error || "Something went wrong.", "err");
@@ -1407,10 +1714,17 @@ $("cdtRefresh").onclick = () => {
   if (cdtLevel === "chat" && cdtCurrentSession) sendRaw("CDT:messages:" + cdtCurrentSession);
   else loadConductor();
 };
+// Ask the Mac to clone a GitHub repo (raw URL or owner/repo, sent verbatim).
+$("cdtAddRepo").onclick = () => {
+  const url = prompt("Add a GitHub repo — paste a URL or owner/repo:");
+  if (!url || !url.trim()) return;
+  showToast("Cloning " + url.trim() + "…");
+  sendRaw("CDT:addrepo:" + url.trim());
+};
 // Reconnect straight from the offline banner, without leaving the current page.
 $("cdtReconnect").onclick = () => {
   if (ws && ws.readyState === WebSocket.OPEN) return;   // already connected
-  connect();
+  reconnect();
 };
 $("cdtFab").onclick = openSheet;
 $("cdtCancel").onclick = closeSheet;

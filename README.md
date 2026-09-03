@@ -18,6 +18,9 @@ phone/browser -> Tailscale -> Mac Python server -> Conductor app
 - Browse Conductor projects and chats from the mobile web UI.
 - Read recent messages from a Conductor chat.
 - Start a new Conductor task in a selected project.
+- Add a GitHub repo from the phone: it's cloned onto the Mac (private repos via
+  `gh`), ready to add as a Conductor project. (Conductor has no local add-repo
+  API, so the final "New project → choose the folder" is a one-tap manual step.)
 - Reply to an existing Conductor chat when `CONDUCTOR_API_TOKEN` is set.
 - Run shell commands on the Mac with a persistent working directory per socket.
 - Toggle `caffeinate` to keep the Mac awake.
@@ -55,6 +58,25 @@ cd server
 - installs the core Python dependencies used by the browser flow,
 - starts the WebSocket server and static web UI.
 
+`start.sh` runs in the foreground. To run it in the **background** and control it
+like a service, use `serverctl.sh`:
+
+```bash
+cd server
+./serverctl.sh start      # launch in the background (logs to server/server.log)
+./serverctl.sh status     # is it running? which ports?
+./serverctl.sh restart    # stop then start
+./serverctl.sh stop       # stop it
+./serverctl.sh logs       # follow the log (Ctrl-C to stop watching)
+```
+
+For a one-word command from anywhere, add a shortcut to your `~/.zshrc`:
+
+```bash
+macremote() { (cd "/full/path/to/repo/server" && ./serverctl.sh "$@"); }
+# then: macremote start | stop | restart | status | logs
+```
+
 It prints URLs and an auth code:
 
 ```text
@@ -64,31 +86,47 @@ Tailscale is ON - reachable from anywhere:
 AUTH CODE:  922031
 ```
 
+## Sign in
+
+The primary sign-in is **per-user email codes** with saved session tokens (so you
+stay signed in for days). See [`server/AUTH.md`](server/AUTH.md) for the full
+flow, protocol, and security notes.
+
 On the phone:
 
 1. Install Tailscale and sign in with the same account as the Mac.
 2. Turn Tailscale on.
-3. Open the printed `http://100.x.x.x:8080` URL.
-4. Enter the auth code and tap Connect.
-5. Tap Conductor to browse projects, chats, and tasks.
+3. Open `http://100.x.x.x:8080` (or the native iOS app), enter the Mac's address
+   and your email, then the 6-digit code emailed to you. You stay signed in for
+   days; a saved session reconnects automatically, and **Log out** ends it.
+4. Tap Conductor to browse projects, chats, and tasks.
 
-If `qrencode` is installed, `start.py` prints a QR code that includes the auth
-code in the URL hash so the web UI can auto-fill it.
+Only allowlisted emails may sign in — set `AUTH_ALLOWED_EMAILS` (it defaults to
+`EMAIL_RECEIVER`). Email must be configured (`EMAIL_SENDER`/`EMAIL_PASSWORD`) to
+send codes.
+
+**Legacy quick connect:** `start.py` also prints a ready-to-open connect URL with
+a shared code embedded in the hash, e.g. `http://100.x.x.x:8080/#922031` (also
+copied to the Mac clipboard). It still works as a fallback; disable with
+`AUTH_LEGACY_CODE=0`.
 
 ## Repository Layout
 
 | Path | Purpose |
 | --- | --- |
 | `server/start.sh` | Recommended launcher. Sets up the venv, tries Tailscale, then runs `start.py`. |
+| `server/serverctl.sh` | Start/stop/restart/status/logs for running the server in the background. |
 | `server/start.py` | Starts the WebSocket server plus static web server on `WEB_PORT` (default `8080`). |
-| `server/server.py` | Auth, WebSocket protocol, shell execution, keep-awake toggle, and Conductor routes. |
+| `server/server.py` | WebSocket protocol, shell execution, keep-awake toggle, and Conductor routes. |
+| `server/auth.py` | Email-code sign-in + session/refresh tokens, backed by SQLite (`auth.db`). |
+| `server/AUTH.md` | Sign-in flow diagram, WebSocket auth protocol, and security notes. |
 | `server/conductor.py` | Read-only Conductor DB access plus deep-link/API send helpers. |
 | `server/web/index.html` | Mobile browser UI for terminal and Conductor control. |
 | `server/client.py` | Minimal CLI client for testing `ws://host:8765`. |
 | `server/calibrate.py` | Helper for finding mouse coordinates for optional UI automation. |
 | `server/coordinates.example.json` | Example `pyautogui` coordinate map. |
 | `server/.env.example` | Environment variable template. |
-| `ios/MacRemote/` | Optional SwiftUI client files for a simple native iOS app. |
+| `ios/MacRemote/` | SwiftUI files for a full native iOS app (browse chats, read transcripts, reply, start tasks, shell, keep-awake). |
 
 ## Setup
 
@@ -216,13 +254,21 @@ The browser terminal and Conductor database/deep-link features work without
 
 ## Optional Native iOS App
 
-The browser UI is the primary client. The SwiftUI files under `ios/MacRemote/`
-are a minimal native WebSocket client for manual control commands.
+A full native SwiftUI client lives under `ios/MacRemote/`. It has a dark,
+minimalist design and covers the main workflow:
 
-To use them:
+- Connect + authenticate with the Mac's Tailscale IP and the emailed code.
+- Browse Conductor chats (workspace-centric, newest first) with search.
+- Read a chat's transcript in message bubbles; it polls for new replies.
+- Reply into a chat, or start a new task from any project.
+- Run shell commands with a persistent working directory.
+- Toggle keep-awake (`caffeinate`) and see connection/API-token status.
 
-1. Create a new SwiftUI iOS app in Xcode.
-2. Replace the generated app/content files with the files in `ios/MacRemote/`.
+To use it:
+
+1. Create a new SwiftUI iOS app in Xcode named `MacRemote`.
+2. Delete the generated `ContentView.swift`/app file and add every file from
+   `ios/MacRemote/` to the target.
 3. Configure App Transport Security for local `ws://` connections, for example
    with `NSAllowsLocalNetworking` or a host-specific exception.
 4. Run on the phone and connect to the Mac's Tailscale IP on port `8765`.
