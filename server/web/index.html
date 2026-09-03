@@ -1086,10 +1086,12 @@ function renderChats() {
     const card = document.createElement("div");
     card.className = "card";
     // Conductor labels an untitled/empty chat by its workspace, not "Untitled".
+    // Prefer the STABLE workspace/directory name over the branch tail so the
+    // label doesn't change when Conductor renames the branch.
     const branchTail = (s.branch || "").split("/").pop();
     const name = (s.title && s.title !== "Untitled")
       ? s.title
-      : (s.workspace_name || branchTail || "Untitled");
+      : (s.workspace_name || s.directory_name || branchTail || "Untitled");
     const sub = [s.branch || s.workspace_name || "", relTime(s.updated_at)].filter(Boolean).join(" · ");
     card.innerHTML =
       `<div class="body"><div class="title2"></div><div class="sub"></div></div>` +
@@ -1409,6 +1411,16 @@ function handleConductor(obj) {
     cdtHasToken = !!obj.has_token;
     // Keep the header title in sync (e.g. once a new task gets named).
     if (obj.session === cdtCurrentSession && obj.title) $("cdtTitle").textContent = obj.title;
+    // A chat we already have open carries its CURRENT branch/name — refresh the
+    // cached row in place (keyed on the stable session id) so a Conductor branch
+    // rename updates the label instead of orphaning the chat.
+    const cached = cdtSessionsData.find((s) => s.id === obj.session);
+    if (cached) {
+      if (obj.branch != null) cached.branch = obj.branch;
+      if (obj.title != null) cached.title = obj.title;
+      if (obj.workspace_name != null) cached.workspace_name = obj.workspace_name;
+      if (obj.directory_name != null) cached.directory_name = obj.directory_name;
+    }
     updateComposerMode();
     return renderMessages(obj.session, obj.items || []);
   }

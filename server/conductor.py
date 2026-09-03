@@ -119,13 +119,13 @@ def list_sessions() -> list[dict]:
     with _connect() as c:
         rows = c.execute(
             """
-            SELECT id, title, status, unread, updated_at, model,
-                   workspace_name, branch, project, project_id
+            SELECT id, workspace_id, title, status, unread, updated_at, model,
+                   workspace_name, directory_name, branch, project, project_id
             FROM (
-                SELECT s.id, s.title, s.status,
+                SELECT s.id, s.workspace_id, s.title, s.status,
                        COALESCE(s.unread_count,0) AS unread,
                        s.updated_at, s.model,
-                       w.workspace_name, w.branch,
+                       w.workspace_name, w.directory_name, w.branch,
                        r.name AS project, r.id AS project_id,
                        ROW_NUMBER() OVER (
                            PARTITION BY COALESCE(s.workspace_id, s.id)
@@ -292,6 +292,37 @@ def session_title(session_id: str) -> str:
     return (row["title"] if row else None) or "Chat"
 
 
+def session_identity(session_id: str) -> dict:
+    """The chat's *current* labels keyed to its stable id, so the client can
+    refresh a chat it already has open when Conductor renames the branch.
+
+    `id` and `workspace_id` never change; `branch`, `workspace_name`, `title`
+    and `directory_name` may. The client should key on `id`/`workspace_id` and
+    only use the rest for display — never as an identifier.
+    """
+    with _connect() as c:
+        row = c.execute(
+            """
+            SELECT s.id, s.workspace_id, s.title,
+                   w.branch, w.workspace_name, w.directory_name
+            FROM sessions s
+            LEFT JOIN workspaces w ON s.workspace_id = w.id
+            WHERE s.id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+    if not row:
+        return {"id": session_id}
+    return {
+        "id": row["id"],
+        "workspace_id": row["workspace_id"],
+        "title": row["title"],
+        "branch": row["branch"],
+        "workspace_name": row["workspace_name"],
+        "directory_name": row["directory_name"],
+    }
+
+
 def session_search_terms(session_id: str) -> list[str]:
     """Candidate strings to look for on screen when locating this chat.
 
@@ -303,7 +334,9 @@ def session_search_terms(session_id: str) -> list[str]:
         row = c.execute(
             """
             SELECT s.title, w.directory_name, w.workspace_name,
-                   w.branch, w.DEPRECATED_city_name AS city
+                   w.user_set_workspace_name, w.user_set_branch_name,
+                   w.placeholder_branch_name, w.branch,
+                   w.DEPRECATED_city_name AS city
             FROM sessions s
             LEFT JOIN workspaces w ON s.workspace_id = w.id
             WHERE s.id = ?
@@ -314,7 +347,12 @@ def session_search_terms(session_id: str) -> list[str]:
     terms: list[str] = []
     if row:
         branch = row["branch"]
-        for v in (row["directory_name"], row["workspace_name"], row["city"],
+        # directory_name is the STABLE city label Conductor shows and doesn't
+        # rename, so it leads. The others cover whatever the sidebar currently
+        # displays after a rename (user-set names, the live branch, its tail).
+        for v in (row["directory_name"], row["workspace_name"],
+                  row["user_set_workspace_name"], row["user_set_branch_name"],
+                  row["placeholder_branch_name"], row["city"],
                   branch, row["title"]):
             if v:
                 terms.append(v)

@@ -7,6 +7,7 @@ struct ChatDetailView: View {
     @EnvironmentObject var model: AppModel
 
     @State private var messages: [ChatMessage] = []
+    @State private var liveTitle: String?   // current name from the server (survives branch renames)
     @State private var draft = ""
     @State private var loading = true
     @State private var sending = false
@@ -20,7 +21,7 @@ struct ChatDetailView: View {
             composer
         }
         .background(AppBackground())
-        .navigationTitle(session.displayName)
+        .navigationTitle(liveTitle ?? session.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
         .task { await startPolling() }
@@ -135,6 +136,13 @@ struct ChatDetailView: View {
     private func reload() async {
         do {
             let resp = try await model.fetchMessages(session.id)
+            // Refresh the header from the chat's CURRENT identity, so a Conductor
+            // branch rename updates the name in place instead of going stale.
+            if let name = [resp.workspaceName, resp.title, resp.directoryName]
+                .compactMap({ $0?.trimmingCharacters(in: .whitespaces) })
+                .first(where: { !$0.isEmpty }) {
+                liveTitle = name
+            }
             // Keep any optimistic tail the server hasn't caught up to yet.
             if resp.items.count >= messages.count || !resp.items.isEmpty {
                 messages = resp.items

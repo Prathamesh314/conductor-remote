@@ -20,30 +20,35 @@ struct Project: Codable, Identifiable, Hashable {
 
 struct Session: Codable, Identifiable, Hashable {
     let id: String
+    let workspaceId: String?
     let title: String?
     let status: String?
     let unread: Int?
     let updatedAt: String?
     let model: String?
     let workspaceName: String?
+    let directoryName: String?
     let branch: String?
     let project: String?
     let projectId: String?
 
     enum CodingKeys: String, CodingKey {
         case id, title, status, unread, model, branch, project
+        case workspaceId = "workspace_id"
         case updatedAt = "updated_at"
         case workspaceName = "workspace_name"
+        case directoryName = "directory_name"
         case projectId = "project_id"
     }
 
-    /// What the row shows as its primary label — matches Conductor's
-    /// workspace-centric sidebar (workspace name, falling back to title).
+    /// What the row shows as its primary label — workspace name, then the chat
+    /// title, then the workspace's stable directory/city name. The final
+    /// fallback is deliberately the directory name (which never changes) rather
+    /// than anything branch-derived, so the label survives a branch rename.
     var displayName: String {
-        let ws = workspaceName?.trimmingCharacters(in: .whitespaces)
-        if let ws, !ws.isEmpty { return ws }
-        let t = title?.trimmingCharacters(in: .whitespaces)
-        if let t, !t.isEmpty { return t }
+        for candidate in [workspaceName, title, directoryName] {
+            if let v = candidate?.trimmingCharacters(in: .whitespaces), !v.isEmpty { return v }
+        }
         return "Untitled"
     }
 
@@ -96,12 +101,19 @@ struct ModelsResponse: Codable { let agents: [AgentModels]; let error: String? }
 
 struct MessagesResponse: Codable {
     let session: String?
+    let workspaceId: String?
     let title: String?
+    let branch: String?
+    let workspaceName: String?
+    let directoryName: String?
     let items: [ChatMessage]
     let hasToken: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case session, title, items
+        case session, title, branch, items
+        case workspaceId = "workspace_id"
+        case workspaceName = "workspace_name"
+        case directoryName = "directory_name"
         case hasToken = "has_token"
     }
 }
