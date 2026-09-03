@@ -64,19 +64,29 @@ Tailscale is ON - reachable from anywhere:
 AUTH CODE:  922031
 ```
 
-`start.py` also prints a ready-to-open **connect URL** with the auth code
-embedded in the hash, e.g. `http://100.x.x.x:8080/#922031` (it's also copied to
-the Mac clipboard). Open that URL on the phone and it auto-fills the code and
-connects — no scanning and no typing the code.
+## Sign in
+
+The primary sign-in is **per-user email codes** with saved session tokens (so you
+stay signed in for days). See [`server/AUTH.md`](server/AUTH.md) for the full
+flow, protocol, and security notes.
 
 On the phone:
 
 1. Install Tailscale and sign in with the same account as the Mac.
 2. Turn Tailscale on.
-3. Open the printed connect URL (`http://100.x.x.x:8080/#<code>`) — it connects
-   automatically. (Or open `http://100.x.x.x:8080`, enter the auth code, and tap
-   Connect.)
+3. Open `http://100.x.x.x:8080` (or the native iOS app), enter the Mac's address
+   and your email, then the 6-digit code emailed to you. You stay signed in for
+   days; a saved session reconnects automatically, and **Log out** ends it.
 4. Tap Conductor to browse projects, chats, and tasks.
+
+Only allowlisted emails may sign in — set `AUTH_ALLOWED_EMAILS` (it defaults to
+`EMAIL_RECEIVER`). Email must be configured (`EMAIL_SENDER`/`EMAIL_PASSWORD`) to
+send codes.
+
+**Legacy quick connect:** `start.py` also prints a ready-to-open connect URL with
+a shared code embedded in the hash, e.g. `http://100.x.x.x:8080/#922031` (also
+copied to the Mac clipboard). It still works as a fallback; disable with
+`AUTH_LEGACY_CODE=0`.
 
 ## Repository Layout
 
@@ -84,7 +94,9 @@ On the phone:
 | --- | --- |
 | `server/start.sh` | Recommended launcher. Sets up the venv, tries Tailscale, then runs `start.py`. |
 | `server/start.py` | Starts the WebSocket server plus static web server on `WEB_PORT` (default `8080`). |
-| `server/server.py` | Auth, WebSocket protocol, shell execution, keep-awake toggle, and Conductor routes. |
+| `server/server.py` | WebSocket protocol, shell execution, keep-awake toggle, and Conductor routes. |
+| `server/auth.py` | Email-code sign-in + session/refresh tokens, backed by SQLite (`auth.db`). |
+| `server/AUTH.md` | Sign-in flow diagram, WebSocket auth protocol, and security notes. |
 | `server/conductor.py` | Read-only Conductor DB access plus deep-link/API send helpers. |
 | `server/web/index.html` | Mobile browser UI for terminal and Conductor control. |
 | `server/client.py` | Minimal CLI client for testing `ws://host:8765`. |

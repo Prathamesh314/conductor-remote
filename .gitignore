@@ -2,6 +2,11 @@
 server/.env
 server/coordinates.json
 
+# Local auth store (users, one-time codes, session tokens)
+server/auth.db
+server/auth.db-wal
+server/auth.db-shm
+
 # Python
 __pycache__/
 *.py[cod]

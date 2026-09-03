@@ -10,8 +10,12 @@ struct SettingsView: View {
                 VStack(spacing: 16) {
                     connectionCard
                     awakeCard
-                    GhostButton(title: "Disconnect", systemImage: "power", tint: Theme.red) {
+                    GhostButton(title: "Disconnect", systemImage: "power", tint: Theme.amber) {
                         model.disconnect()
+                    }
+                    GhostButton(title: "Log out", systemImage: "rectangle.portrait.and.arrow.right",
+                                tint: Theme.red) {
+                        model.logout()
                     }
                     Text("Mac Remote · connected over Tailscale")
                         .font(.caption)
@@ -36,6 +40,8 @@ struct SettingsView: View {
         Card {
             VStack(alignment: .leading, spacing: 14) {
                 SectionHeader(title: "Connection")
+                infoRow(icon: "person.crop.circle", label: "Signed in", value: model.email)
+                Divider().overlay(Theme.hairline)
                 infoRow(icon: "network", label: "Host", value: model.serverHost)
                 Divider().overlay(Theme.hairline)
                 infoRow(icon: "checkmark.seal.fill", label: "Status", value: "Connected",

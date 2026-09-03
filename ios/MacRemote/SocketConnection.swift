@@ -27,7 +27,7 @@ enum SocketError: LocalizedError {
 actor SocketConnection {
     private let task: URLSessionWebSocketTask
     private var pending: [CheckedContinuation<String, Error>] = []
-    private var authContinuation: CheckedContinuation<Void, Error>?
+    private var authContinuation: CheckedContinuation<String, Error>?
     private var isAuthed = false
     private var closed = false
 
@@ -47,12 +47,26 @@ actor SocketConnection {
 
     // MARK: Auth
 
-    /// Send the auth code and wait for the server's verdict.
-    func authenticate(code: String) async throws {
-        task.send(.string(code)) { _ in }
-        try await withCheckedThrowingContinuation { cont in
+    /// Send one pre-auth control message and await the server's single JSON
+    /// reply (verbatim). The caller (AppModel) interprets the `{"auth":...}`
+    /// payload and calls `markAuthenticated()` once it sees an "ok".
+    func authExchange(_ message: String) async throws -> String {
+        guard !closed else { throw SocketError.notConnected }
+        return try await withCheckedThrowingContinuation { cont in
             self.authContinuation = cont
+            task.send(.string(message)) { [weak self] error in
+                guard let error else { return }
+                Task { await self?.failAuth(error) }
+            }
         }
+    }
+
+    /// Flip the socket into the authenticated state so `request(_:)` is allowed.
+    func markAuthenticated() { isAuthed = true }
+
+    /// Fire-and-forget a control message with no awaited reply (e.g. logout).
+    func sendControl(_ message: String) {
+        task.send(.string(message)) { _ in }
     }
 
     // MARK: Requests
@@ -91,20 +105,18 @@ actor SocketConnection {
         pending.removeFirst().resume(throwing: SocketError.transport(error.localizedDescription))
     }
 
+    private func failAuth(_ error: Error) {
+        authContinuation?.resume(throwing: SocketError.transport(error.localizedDescription))
+        authContinuation = nil
+    }
+
     private func deliver(_ text: String) {
         if !isAuthed {
-            switch text {
-            case "AUTH_SUCCESS":
-                isAuthed = true
-                authContinuation?.resume()
-            case "AUTH_FAILED":
-                authContinuation?.resume(throwing: SocketError.authFailed)
-            case "AUTH_LOCKED":
-                authContinuation?.resume(throwing: SocketError.authLocked)
-                closed = true
-            default:
-                break  // ignore stray pre-auth chatter
-            }
+            // Pre-auth: hand the raw reply back to the awaiting authExchange call.
+            // AppModel parses it and decides success/failure. (Any stray extra
+            // message with no waiter — e.g. a legacy AUTH_LOCKED after a FAILED —
+            // is simply ignored.)
+            authContinuation?.resume(returning: text)
             authContinuation = nil
             return
         }

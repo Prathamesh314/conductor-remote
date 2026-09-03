@@ -31,6 +31,12 @@ from pathlib import Path
 import websockets
 from dotenv import load_dotenv
 
+# Load .env BEFORE importing local modules: auth/conductor/conductor_ui read
+# configuration (SMTP creds, the email allowlist, Conductor paths, calibration
+# coordinates) from the environment at import time.
+load_dotenv()
+
+import auth
 import conductor as cdt
 import conductor_ui as cui
 
@@ -54,8 +60,6 @@ class _NeverRaised(Exception):
 
 _FailSafe = pyautogui.FailSafeException if pyautogui else _NeverRaised
 
-load_dotenv()
-
 # --- Configuration (from environment / .env) ---
 EMAIL_SENDER = os.environ.get("EMAIL_SENDER", "")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD", "")
@@ -68,11 +72,13 @@ PORT = int(os.environ.get("PORT", "8765"))
 MAX_AUTH_ATTEMPTS = int(os.environ.get("MAX_AUTH_ATTEMPTS", "5"))
 COORDINATES_FILE = os.environ.get("COORDINATES_FILE", "coordinates.json")
 
-# Auth code: use a fixed code from the environment if set (so you can connect
-# from far away without seeing the Mac's screen), otherwise generate a fresh
-# random one each start.
+# Legacy shared auth code: a single fixed/random code, delivered via the connect
+# URL. Kept as a fallback so the printed connect URL still works; the primary
+# path is now per-user email sign-in (see auth.py). Disable with
+# AUTH_LEGACY_CODE=0 to require email sign-in for everyone.
 _ENV_CODE = os.environ.get("AUTH_CODE", "").strip()
 AUTH_CODE = _ENV_CODE if _ENV_CODE else f"{random.randint(0, 999999):06d}"
+LEGACY_CODE_ENABLED = os.environ.get("AUTH_LEGACY_CODE", "1").strip().lower() not in ("0", "false", "no")
 
 # Sentinel used to smuggle the post-command working directory back out of the
 # subshell so `cd` persists across commands.
@@ -372,6 +378,71 @@ async def execute(message: str, session: dict) -> str:
     return f"Unknown command: {message}"
 
 
+def _auth_json(message: str) -> dict | None:
+    """Parse a message as an {"auth": ...} control object, else None."""
+    if not message or not message.lstrip().startswith("{"):
+        return None
+    try:
+        obj = json.loads(message)
+    except Exception:  # noqa: BLE001
+        return None
+    return obj if isinstance(obj, dict) and obj.get("auth") else None
+
+
+async def _handle_auth(message: str, session: dict) -> tuple[str, bool, bool]:
+    """Process a pre-auth message.
+
+    Returns (reply, authenticated, hard_fail). `hard_fail` means it counts
+    toward the per-connection lockout (wrong code / bad legacy code), as opposed
+    to soft outcomes like "code sent" or an expired token the client can refresh.
+    """
+    obj = _auth_json(message)
+    if obj is not None:
+        verb = obj.get("auth")
+        if verb == "request":
+            res = await asyncio.to_thread(auth.request_code, obj.get("email", ""))
+            if res.get("ok"):
+                reply = {"auth": "code_sent", "email": res.get("email")}
+                if "code" in res:                       # AUTH_DEBUG_CODE only
+                    reply["debug_code"] = res["code"]
+                return json.dumps(reply), False, False
+            return json.dumps({"auth": "error", "code": res.get("code", "error"),
+                               "error": res.get("error", "Couldn't send code.")}), False, False
+        if verb == "verify":
+            res = await asyncio.to_thread(auth.verify_code, obj.get("email", ""), obj.get("code", ""))
+            if res.get("ok"):
+                session.update(authenticated=True, email=res["email"],
+                               session_token=res["session_token"], refresh_token=res["refresh_token"])
+                return json.dumps({"auth": "ok", **{k: res[k] for k in (
+                    "email", "session_token", "refresh_token", "expires_at", "refresh_expires_at")}}), True, False
+            return json.dumps({"auth": "error", "code": res.get("code", "invalid"),
+                               "error": res.get("error", "Wrong code.")}), False, True
+        if verb in ("session", "refresh"):
+            fn = auth.validate_session if verb == "session" else auth.refresh_session
+            res = await asyncio.to_thread(fn, obj.get("token", ""))
+            if res.get("ok"):
+                session["authenticated"] = True
+                session["email"] = res["email"]
+                if verb == "session":
+                    session["session_token"] = obj.get("token", "")
+                    return json.dumps({"auth": "ok", "email": res["email"],
+                                       "expires_at": res.get("expires_at")}), True, False
+                session.update(session_token=res["session_token"], refresh_token=res["refresh_token"])
+                return json.dumps({"auth": "ok", **{k: res[k] for k in (
+                    "email", "session_token", "refresh_token", "expires_at", "refresh_expires_at")}}), True, False
+            # A stale token is not a brute-force attempt — let the client re-auth.
+            return json.dumps({"auth": "error", "code": res.get("code", "invalid"),
+                               "error": res.get("error", "Invalid token.")}), False, False
+        return json.dumps({"auth": "error", "code": "bad_request",
+                           "error": f"Unknown auth verb: {verb}"}), False, False
+
+    # Legacy shared-code fallback (the printed connect URL still works).
+    if LEGACY_CODE_ENABLED and message == AUTH_CODE:
+        session.update(authenticated=True, email="legacy")
+        return "AUTH_SUCCESS", True, False
+    return "AUTH_FAILED", False, True
+
+
 async def handle_client(websocket) -> None:
     peer = getattr(websocket, "remote_address", "?")
     print(f"New device connected from {peer}. Waiting for auth...")
@@ -381,19 +452,28 @@ async def handle_client(websocket) -> None:
     try:
         async for message in websocket:
             if not session["authenticated"]:
-                if message == AUTH_CODE:
-                    session["authenticated"] = True
-                    await websocket.send("AUTH_SUCCESS")
-                    print("Client Authenticated!")
-                else:
+                reply, authed, hard_fail = await _handle_auth(message, session)
+                await websocket.send(reply)
+                if authed:
+                    print(f"Client authenticated ({session.get('email')}).")
+                elif hard_fail:
                     attempts += 1
-                    await websocket.send("AUTH_FAILED")
                     print(f"Bad auth attempt {attempts}/{MAX_AUTH_ATTEMPTS}.")
                     if attempts >= MAX_AUTH_ATTEMPTS:
                         await websocket.send("AUTH_LOCKED")
                         await websocket.close()
                         return
                 continue
+
+            # Authenticated: a logout control message ends the session.
+            obj = _auth_json(message)
+            if obj is not None and obj.get("auth") == "logout":
+                await asyncio.to_thread(auth.logout, session.get("session_token", ""),
+                                        session.get("refresh_token", ""))
+                await websocket.send(json.dumps({"auth": "logged_out"}))
+                await websocket.close()
+                print(f"Client logged out ({session.get('email')}).")
+                return
 
             print(f"Command received: {message}")
             try:
@@ -407,6 +487,8 @@ async def handle_client(websocket) -> None:
 
 
 async def main() -> None:
+    auth.init_db()
+    auth.print_startup_notes()
     deliver_code()
     async with websockets.serve(handle_client, HOST_IP, PORT):
         print(f"WebSocket server running on ws://{HOST_IP}:{PORT}")
