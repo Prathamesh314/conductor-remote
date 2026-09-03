@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 import sqlite3
 import subprocess
 import time
@@ -26,9 +28,126 @@ SUBMIT_DELAY = float(os.environ.get("CONDUCTOR_SUBMIT_DELAY", "4"))
 # "enter" (default) or "cmd-enter" if your Conductor sends on ⌘-Enter.
 SUBMIT_KEY = os.environ.get("CONDUCTOR_SUBMIT_KEY", "enter").strip().lower()
 
+# Where "Add repo" clones new GitHub projects on the Mac. Conductor then adds the
+# folder as a project. Defaults next to your other projects' parent if we can
+# guess it, else ~/ConductorProjects.
+PROJECTS_DIR = os.path.expanduser(
+    os.environ.get("CONDUCTOR_PROJECTS_DIR", "~/ConductorProjects"))
+# Seconds to allow a clone before giving up (big repos over slow links).
+CLONE_TIMEOUT = float(os.environ.get("CONDUCTOR_CLONE_TIMEOUT", "600"))
+
 
 def available() -> bool:
     return os.path.exists(DB_PATH)
+
+
+# --- Add a GitHub repo as a local project -----------------------------------
+def _parse_repo_url(raw: str) -> tuple[str | None, str | None, str | None]:
+    """Normalize a user-supplied repo reference.
+
+    Accepts `owner/repo`, `https://github.com/owner/repo[.git]`, or
+    `git@host:owner/repo[.git]`. Returns (clone_target, repo_name, owner_repo)
+    where owner_repo is "owner/repo" for GitHub (so we can use `gh`), else None.
+    Returns (None, None, None) if it doesn't look like a git repo reference.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return None, None, None
+    # owner/repo shorthand (GitHub)
+    if re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", raw):
+        owner_repo = raw[:-4] if raw.endswith(".git") else raw
+        return f"https://github.com/{owner_repo}.git", owner_repo.split("/")[-1], owner_repo
+    # git@host:owner/repo(.git)
+    m = re.fullmatch(r"git@([\w.-]+):(.+?)(?:\.git)?/?", raw)
+    if m:
+        path = m.group(2)
+        owner_repo = path if m.group(1) == "github.com" else None
+        return raw, path.split("/")[-1], owner_repo
+    # http(s)://host/owner/repo(.git)
+    m = re.fullmatch(r"https?://([\w.-]+)/(.+?)(?:\.git)?/?", raw)
+    if m:
+        path = m.group(2)
+        owner_repo = path if m.group(1).endswith("github.com") else None
+        return raw, path.split("/")[-1], owner_repo
+    return None, None, None
+
+
+def add_repo(raw_url: str) -> dict:
+    """Clone a GitHub repo onto the Mac so it can be added as a Conductor project.
+
+    Private repos work when the `gh` CLI is logged in (preferred) or git has
+    stored credentials. Returns {"ok", "path", "name", "note"} on success, or
+    {"ok": False, "error": ...}. Conductor has no local "add repo" API, so after
+    cloning we bring Conductor to the front for the one-tap "add project" step.
+    """
+    target, name, owner_repo = _parse_repo_url(raw_url)
+    if not target:
+        return {"ok": False, "error": "That doesn't look like a GitHub URL or owner/repo."}
+    name = re.sub(r"[^A-Za-z0-9._-]", "", name or "").lstrip(".") or "repo"
+    if name in (".", ".."):
+        name = "repo"
+
+    dest = os.path.join(PROJECTS_DIR, name)
+    if os.path.exists(dest):
+        if os.path.isdir(os.path.join(dest, ".git")):
+            _bring_conductor_forward()
+            return {"ok": True, "path": dest, "name": name, "already": True,
+                    "note": f"'{name}' is already cloned at {dest}. Add it in "
+                            "Conductor: New project → choose this folder."}
+        return {"ok": False, "error": f"{dest} already exists and isn't a git repo."}
+
+    try:
+        os.makedirs(PROJECTS_DIR, exist_ok=True)
+    except OSError as exc:
+        return {"ok": False, "error": f"Can't create {PROJECTS_DIR}: {exc}"}
+
+    # Prefer `gh repo clone` (uses your GitHub login → private repos just work).
+    if owner_repo and shutil.which("gh"):
+        cmd = ["gh", "repo", "clone", owner_repo, dest]
+    else:
+        cmd = ["git", "clone", target, dest]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True,
+                             timeout=CLONE_TIMEOUT, env=os.environ)
+    except subprocess.TimeoutExpired:
+        _rmtree_quiet(dest)
+        return {"ok": False, "error": f"Clone timed out after {int(CLONE_TIMEOUT)}s."}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"Clone failed to start: {exc}"}
+
+    if res.returncode != 0:
+        _rmtree_quiet(dest)   # don't leave a half-clone behind
+        err = (res.stderr or res.stdout or "").strip().splitlines()
+        msg = err[-1] if err else "unknown error"
+        if "already exists" in msg:
+            msg = "destination already exists."
+        elif "Repository not found" in msg or "not found" in msg.lower():
+            msg = "repository not found (private? check `gh auth login` on the Mac)."
+        elif "Authentication" in msg or "could not read Username" in msg:
+            msg = "authentication needed — run `gh auth login` on the Mac."
+        return {"ok": False, "error": f"Clone failed: {msg}"}
+
+    _bring_conductor_forward()
+    return {"ok": True, "path": dest, "name": name,
+            "note": f"Cloned {name} to {dest}. Add it in Conductor: "
+                    "New project → choose this folder."}
+
+
+def _rmtree_quiet(path: str) -> None:
+    try:
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+    except OSError:
+        pass
+
+
+def _bring_conductor_forward() -> None:
+    """Best-effort: make sure Conductor is open so the user can add the project."""
+    try:
+        import conductor_ui as _cui
+        _cui.ensure_conductor()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def list_models() -> dict:

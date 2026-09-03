@@ -142,6 +142,16 @@ struct MessagesResponse: Codable {
     }
 }
 
+/// Result of an add-repo command (CDT:addrepo). All keys are flat/lowercase.
+struct RepoResult: Codable {
+    let ok: Bool?
+    let name: String?
+    let path: String?
+    let note: String?
+    let error: String?
+    let already: Bool?
+}
+
 /// Result of a send / newtask command.
 struct SendResult: Codable {
     let ok: Bool?

@@ -18,6 +18,9 @@ phone/browser -> Tailscale -> Mac Python server -> Conductor app
 - Browse Conductor projects and chats from the mobile web UI.
 - Read recent messages from a Conductor chat.
 - Start a new Conductor task in a selected project.
+- Add a GitHub repo from the phone: it's cloned onto the Mac (private repos via
+  `gh`), ready to add as a Conductor project. (Conductor has no local add-repo
+  API, so the final "New project → choose the folder" is a one-tap manual step.)
 - Reply to an existing Conductor chat when `CONDUCTOR_API_TOKEN` is set.
 - Run shell commands on the Mac with a persistent working directory per socket.
 - Toggle `caffeinate` to keep the Mac awake.
