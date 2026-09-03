@@ -58,6 +58,25 @@ cd server
 - installs the core Python dependencies used by the browser flow,
 - starts the WebSocket server and static web UI.
 
+`start.sh` runs in the foreground. To run it in the **background** and control it
+like a service, use `serverctl.sh`:
+
+```bash
+cd server
+./serverctl.sh start      # launch in the background (logs to server/server.log)
+./serverctl.sh status     # is it running? which ports?
+./serverctl.sh restart    # stop then start
+./serverctl.sh stop       # stop it
+./serverctl.sh logs       # follow the log (Ctrl-C to stop watching)
+```
+
+For a one-word command from anywhere, add a shortcut to your `~/.zshrc`:
+
+```bash
+macremote() { (cd "/full/path/to/repo/server" && ./serverctl.sh "$@"); }
+# then: macremote start | stop | restart | status | logs
+```
+
 It prints URLs and an auth code:
 
 ```text
@@ -96,6 +115,7 @@ copied to the Mac clipboard). It still works as a fallback; disable with
 | Path | Purpose |
 | --- | --- |
 | `server/start.sh` | Recommended launcher. Sets up the venv, tries Tailscale, then runs `start.py`. |
+| `server/serverctl.sh` | Start/stop/restart/status/logs for running the server in the background. |
 | `server/start.py` | Starts the WebSocket server plus static web server on `WEB_PORT` (default `8080`). |
 | `server/server.py` | WebSocket protocol, shell execution, keep-awake toggle, and Conductor routes. |
 | `server/auth.py` | Email-code sign-in + session/refresh tokens, backed by SQLite (`auth.db`). |

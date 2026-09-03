@@ -31,3 +31,7 @@ xcuserdata/
 
 # compiled OCR helper
 server/.ocr_bin
+
+# serverctl.sh runtime files (background PID + captured log)
+server/.server.pid
+server/server.log
