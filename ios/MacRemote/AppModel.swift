@@ -73,6 +73,10 @@ final class AppModel: ObservableObject {
         try await decode(SessionsResponse.self, from: "CDT:sessions").items
     }
 
+    func fetchModels() async throws -> ModelsResponse {
+        try await decode(ModelsResponse.self, from: "CDT:models")
+    }
+
     func fetchMessages(_ sessionId: String) async throws -> MessagesResponse {
         let resp = try await decode(MessagesResponse.self, from: "CDT:messages:\(sessionId)")
         hasApiToken = resp.hasToken ?? hasApiToken
@@ -83,8 +87,19 @@ final class AppModel: ObservableObject {
         try await decode(SendResult.self, from: "CDT:send:\(sessionId):\(text)")
     }
 
-    func newTask(path: String?, text: String) async throws -> SendResult {
-        try await decode(SendResult.self, from: "CDT:newtask:\(path ?? ""):\(text)")
+    func newTask(path: String?, text: String, agent: String?, model: String?) async throws -> SendResult {
+        // The server expects: "CDT:newtask:" + a JSON string starting with "{".
+        let payload = NewTaskPayload(path: path ?? "", prompt: text, agent: agent, model: model)
+        let data = try JSONEncoder().encode(payload)
+        let json = String(decoding: data, as: UTF8.self)
+        return try await decode(SendResult.self, from: "CDT:newtask:" + json)
+    }
+
+    private struct NewTaskPayload: Encodable {
+        let path: String
+        let prompt: String
+        let agent: String?
+        let model: String?
     }
 
     // MARK: Shell + system

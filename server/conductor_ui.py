@@ -15,6 +15,8 @@ Self-test on the Mac (see what it detects, without sending anything):
     python3 conductor_ui.py where                      # hover to read x,y of an icon
     python3 conductor_ui.py ocr                        # dump everything OCR sees
     python3 conductor_ui.py find "istanbul"            # show the sidebar match
+    python3 conductor_ui.py ensure                      # launch full screen if closed
+    python3 conductor_ui.py model "opus-4-8"            # pick a model in the composer
     python3 conductor_ui.py filter "vagent-backend-py" "istanbul" "your message"
     python3 conductor_ui.py send "istanbul" "your message" "vagent-backend-py"
 
@@ -62,6 +64,11 @@ FILTER_ICON_XY = os.environ.get("CONDUCTOR_FILTER_ICON_XY", "").strip()
 REPO_ALL_LABEL = os.environ.get("CONDUCTOR_REPO_ALL_LABEL", "All repos")
 # Optional composer click point "x,y" normalized (0..1) if auto-focus fails.
 COMPOSER_XY = os.environ.get("CONDUCTOR_COMPOSER_XY", "").strip()
+# The composer's model/agent selector is an icon OCR can't find, so give its
+# position as "x,y" fractions (use: conductor_ui.py where) to enable picking a
+# model on a new task. Without it, model selection is skipped (task uses the
+# workspace's default model).
+MODEL_PICKER_XY = os.environ.get("CONDUCTOR_MODEL_PICKER_XY", "").strip()
 SUBMIT_KEY = os.environ.get("CONDUCTOR_SUBMIT_KEY", "enter").strip().lower()
 # When Conductor is closed and we have to launch it, put it into macOS full
 # screen so the sidebar has a stable, maximized layout for OCR. Only applies to a
@@ -336,6 +343,43 @@ def type_and_send(text: str) -> None:
         pg.press("enter")
 
 
+def _press_escape() -> None:
+    """Dismiss an open menu/popover so we never leave the UI in a bad state."""
+    try:
+        _lazy_pyautogui().press("esc")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def select_model(model: str, agent: str | None = None) -> dict:
+    """Open the composer's model picker and choose `model` (best-effort).
+
+    The new-task composer shows a model/agent selector; the deep link can't set
+    a model, so we click it open and pick the requested model by its on-screen
+    name. Needs CONDUCTOR_MODEL_PICKER_XY (the selector's position) since the
+    control is an icon OCR can't locate on its own. Model-name matching is
+    separator-insensitive, so "opus-4-8" matches an "Opus 4.8" menu row.
+
+    Returns {"ok": True} on success, else {"ok": False, "error": "..."}.
+    """
+    if not model:
+        return {"ok": False, "error": "no model given"}
+    if not MODEL_PICKER_XY:
+        return {"ok": False, "error": "model picker position not configured "
+                "(set CONDUCTOR_MODEL_PICKER_XY)"}
+    if not _click_xy_env(MODEL_PICKER_XY):        # open the model menu
+        return {"ok": False, "error": "couldn't open the model picker"}
+    time.sleep(0.5)
+    # The menu lists model names as text — find + click ours anywhere on screen.
+    it = find_text([model], screen_ocr())
+    if not it:
+        _press_escape()                           # leave the menu closed
+        return {"ok": False, "error": f"'{model}' not found in the model picker"}
+    click_norm(it["x"], it["y"])
+    time.sleep(0.4)
+    return {"ok": True, "model": it.get("text", model)}
+
+
 def _click_xy_env(value: str) -> bool:
     """Click a normalized "x,y" screen point from config. Returns False if unset."""
     if not value:
@@ -483,6 +527,10 @@ def _main(argv: list[str]) -> None:
         activate_conductor(); time.sleep(0.7)
         t = _tap([argv[1]])
         print("tapped", t["text"] if t else "NONE FOUND")
+    elif cmd == "model" and len(argv) > 1:
+        # test picking a model in the composer: model <model-id> [agent]
+        activate_conductor(); time.sleep(0.7)
+        print(select_model(argv[1], argv[2] if len(argv) > 2 else None))
     elif cmd == "filter" and len(argv) > 3:
         # test the full filter flow: filter <project> <chat> <message>
         activate_conductor(); time.sleep(0.7)

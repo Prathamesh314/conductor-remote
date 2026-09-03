@@ -723,6 +723,8 @@
       <h2>New Task</h2>
       <div class="hint">Which project?</div>
       <div id="cdtChips" class="chips"></div>
+      <div class="hint">Model</div>
+      <div id="cdtModelChips" class="chips"></div>
       <div class="hint">What should the agent do?</div>
       <textarea id="cdtPrompt" placeholder="e.g. Add a /health endpoint and a test for it."></textarea>
       <div class="actions">
@@ -955,6 +957,9 @@ let cdtCurrentProject = null;     // {id, name, root_path}
 let cdtCurrentSession = null;
 let cdtComposeProject = null;
 let cdtHasToken = false;          // does the server have a Conductor API token?
+let cdtModelsData = [];           // [{agent, models:[…], default_model, …}] from the server
+let cdtSelModel = null;           // selected model id
+let cdtSelAgent = null;           // agent that owns the selected model
 
 function showConductor(on) {
   $("termView").classList.toggle("hidden", on);
@@ -1333,10 +1338,34 @@ function openSheet() {
     };
     chips.appendChild(c);
   }
+  // Ask the server for the model list the first time; the reply re-renders us.
+  if (!cdtModelsData.length) sendRaw("CDT:models");
+  renderModelChips();
   $("cdtPrompt").value = "";
   $("cdtCreateStatus").textContent = "";
   $("cdtSheet").classList.remove("hidden");
   $("cdtPrompt").focus();
+}
+
+// Fill the Model chips: one .chip per model, across every agent. The selected
+// one gets .sel; tapping a chip records its model id + owning agent.
+function renderModelChips() {
+  const chips = $("cdtModelChips");
+  chips.innerHTML = "";
+  for (const a of cdtModelsData) {
+    for (const model of (a.models || [])) {
+      const c = document.createElement("div");
+      c.className = "chip" + (model === cdtSelModel && a.agent === cdtSelAgent ? " sel" : "");
+      c.textContent = model;
+      c.onclick = () => {
+        cdtSelModel = model;
+        cdtSelAgent = a.agent;
+        [...chips.children].forEach((x) => x.classList.remove("sel"));
+        c.classList.add("sel");
+      };
+      chips.appendChild(c);
+    }
+  }
 }
 
 function closeSheet() { $("cdtSheet").classList.add("hidden"); }
@@ -1345,13 +1374,26 @@ function createTask() {
   const prompt = $("cdtPrompt").value.trim();
   if (!prompt) { $("cdtCreateStatus").textContent = "Type what the agent should do."; return; }
   const path = cdtComposeProject ? (cdtComposeProject.root_path || "") : "";
-  sendRaw("CDT:newtask:" + path + ":" + prompt);
+  const payload = { path: path, prompt: prompt, agent: cdtSelAgent, model: cdtSelModel };
+  sendRaw("CDT:newtask:" + JSON.stringify(payload));
   $("cdtCreateStatus").textContent = "Creating task…";
 }
 
 function sheetOpen() { return !$("cdtSheet").classList.contains("hidden"); }
 
 function handleConductor(obj) {
+  if (obj.cdt === "models") {
+    cdtModelsData = obj.agents || [];
+    // Default to the "claude" agent's default model, else the first agent's
+    // default, else just the first model we were given.
+    let pick = cdtModelsData.find((a) => a.agent === "claude") || cdtModelsData[0];
+    if (pick) {
+      cdtSelAgent = pick.agent;
+      cdtSelModel = pick.default_model || (pick.models && pick.models[0]) || null;
+    }
+    if (sheetOpen()) renderModelChips();
+    return;
+  }
   if (obj.cdt === "projects") {
     cdtProjectsData = obj.items || [];
     if (cdtLevel === "projects") renderProjects();
