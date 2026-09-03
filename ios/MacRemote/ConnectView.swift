@@ -1,18 +1,24 @@
 import SwiftUI
 
-/// Connect + authenticate. Enter the Mac's Tailscale IP and the 6-digit code
-/// the server emailed / posted to Discord.
+/// Sign in. Enter the Mac's Tailscale IP and your email; the server emails a
+/// 6-digit code, and verifying it keeps you signed in for days via saved tokens.
 struct ConnectView: View {
     @EnvironmentObject var model: AppModel
+    @State private var emailInput = ""
     @State private var code = ""
+    @State private var forceEmail = false   // "use a different email" overrides the reconnect shortcut
     @FocusState private var focus: Field?
 
-    enum Field { case host, code }
+    enum Field { case host, email, code }
 
-    private var connecting: Bool { model.phase == .connecting }
-    private var canConnect: Bool {
-        !model.serverHost.trimmingCharacters(in: .whitespaces).isEmpty && code.count >= 4
+    private var busy: Bool { model.phase == .connecting }
+    private var awaitingCode: Bool { model.phase == .codeSent }
+
+    private var canSendCode: Bool {
+        !model.serverHost.trimmingCharacters(in: .whitespaces).isEmpty
+            && emailInput.contains("@")
     }
+    private var canVerify: Bool { code.count >= 4 }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -24,26 +30,23 @@ struct ConnectView: View {
                 FieldRow(icon: "network", placeholder: "Mac Tailscale IP  ·  100.x.x.x",
                          text: $model.serverHost, keyboard: .numbersAndPunctuation, mono: true)
                     .focused($focus, equals: .host)
+                    .disabled(awaitingCode)
 
-                FieldRow(icon: "key.fill", placeholder: "6-digit auth code",
-                         text: $code, keyboard: .numberPad)
-                    .focused($focus, equals: .code)
+                if awaitingCode {
+                    codeStep
+                } else if model.hasSavedSession && !forceEmail {
+                    reconnectStep
+                } else {
+                    emailStep
+                }
 
                 if !model.statusMessage.isEmpty {
-                    Label(model.statusMessage, systemImage: "exclamationmark.triangle.fill")
+                    Label(model.statusMessage, systemImage: "info.circle")
                         .font(.footnote)
-                        .foregroundStyle(Theme.red)
+                        .foregroundStyle(Theme.textDim)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .transition(.opacity)
                 }
-
-                PrimaryButton(title: connecting ? "Connecting…" : "Connect",
-                              systemImage: "bolt.horizontal.fill",
-                              loading: connecting, enabled: canConnect) {
-                    dismissKeyboard()
-                    Task { await model.connect(code: code) }
-                }
-                .padding(.top, 4)
             }
             .padding(20)
             .background(Theme.surface.opacity(0.6),
@@ -62,6 +65,67 @@ struct ConnectView: View {
         }
         .padding(.horizontal, 22)
         .animation(.easeInOut, value: model.statusMessage)
+        .animation(.easeInOut, value: awaitingCode)
+        .onAppear { if emailInput.isEmpty { emailInput = model.email } }
+    }
+
+    // Shortcut: a saved session is still on disk — reconnect without re-emailing.
+    private var reconnectStep: some View {
+        VStack(spacing: 14) {
+            PrimaryButton(title: busy ? "Reconnecting…" : "Reconnect as \(model.email)",
+                          systemImage: "bolt.horizontal.fill",
+                          loading: busy, enabled: !busy) {
+                Task { await model.resumeSession() }
+            }
+            .padding(.top, 4)
+
+            Button("Use a different email") { forceEmail = true }
+                .font(.footnote)
+                .foregroundStyle(Theme.accent)
+        }
+    }
+
+    // Step 1: enter email, request a code.
+    private var emailStep: some View {
+        VStack(spacing: 14) {
+            FieldRow(icon: "envelope.fill", placeholder: "you@email.com",
+                     text: $emailInput, keyboard: .emailAddress)
+                .focused($focus, equals: .email)
+
+            PrimaryButton(title: busy ? "Sending…" : "Email me a code",
+                          systemImage: "paperplane.fill",
+                          loading: busy, enabled: canSendCode) {
+                dismissKeyboard()
+                Task { await model.sendCode(email: emailInput) }
+            }
+            .padding(.top, 4)
+        }
+    }
+
+    // Step 2: enter the emailed code, verify + connect.
+    private var codeStep: some View {
+        VStack(spacing: 14) {
+            FieldRow(icon: "key.fill", placeholder: "6-digit code",
+                     text: $code, keyboard: .numberPad)
+                .focused($focus, equals: .code)
+
+            PrimaryButton(title: busy ? "Verifying…" : "Verify & connect",
+                          systemImage: "bolt.horizontal.fill",
+                          loading: busy, enabled: canVerify) {
+                dismissKeyboard()
+                Task { await model.verifyCode(code) }
+            }
+            .padding(.top, 4)
+
+            HStack {
+                Button("Resend code") { Task { await model.sendCode(email: emailInput) } }
+                Spacer()
+                Button("Change email") { code = ""; model.disconnect() }
+            }
+            .font(.footnote)
+            .foregroundStyle(Theme.accent)
+            .disabled(busy)
+        }
     }
 
     private var logo: some View {

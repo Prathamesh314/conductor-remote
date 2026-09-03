@@ -17,6 +17,12 @@ struct RootView: View {
             }
         }
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: model.phase)
+        .task {
+            // Auto-reconnect on launch if we still have a saved session.
+            if model.hasSavedSession, model.phase == .signedOut {
+                await model.resumeSession()
+            }
+        }
     }
 }
 

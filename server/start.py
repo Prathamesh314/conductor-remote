@@ -128,6 +128,8 @@ def start_web_server() -> None:
 
 
 async def main() -> None:
+    srv.auth.init_db()
+    srv.auth.print_startup_notes()
     srv.deliver_code()
     start_web_server()
 

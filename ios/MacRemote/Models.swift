@@ -93,6 +93,30 @@ struct AgentModels: Codable, Identifiable, Hashable {
     }
 }
 
+// MARK: - Auth
+
+/// A `{"auth": ...}` reply from the server during the sign-in handshake.
+struct AuthReply: Decodable {
+    let auth: String?            // "code_sent" | "ok" | "error" | "logged_out"
+    let email: String?
+    let sessionToken: String?
+    let refreshToken: String?
+    let expiresAt: String?
+    let refreshExpiresAt: String?
+    let code: String?           // error code, e.g. "expired", "invalid", "denied"
+    let error: String?          // human-readable error
+    let debugCode: String?      // present only in server debug mode
+
+    enum CodingKeys: String, CodingKey {
+        case auth, email, code, error
+        case sessionToken = "session_token"
+        case refreshToken = "refresh_token"
+        case expiresAt = "expires_at"
+        case refreshExpiresAt = "refresh_expires_at"
+        case debugCode = "debug_code"
+    }
+}
+
 // MARK: - Response envelopes
 
 struct ProjectsResponse: Codable { let items: [Project] }
