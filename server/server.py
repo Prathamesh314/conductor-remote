@@ -229,6 +229,33 @@ def _is_duplicate_send(sid: str, text: str) -> bool:
     return last is not None and (now - last) < _DUP_WINDOW_S
 
 
+# Last branch we saw per session id, so we can tell the client which chats were
+# renamed between two `CDT:sessions` fetches. Keyed on the STABLE session id.
+_last_branch: dict[str, str] = {}
+
+
+def _branch_changes(items: list[dict]) -> list[dict]:
+    """Sessions whose branch changed since the previous `CDT:sessions` fetch.
+
+    Returns [{"session", "workspace_id", "branch", "previous"}]. The first fetch
+    just seeds the snapshot (returns []), so a fresh connection isn't told that
+    every chat "changed".
+    """
+    seeded = bool(_last_branch)
+    changes: list[dict] = []
+    for s in items:
+        sid = s.get("id")
+        if not sid:
+            continue
+        branch = s.get("branch")
+        prev = _last_branch.get(sid)
+        _last_branch[sid] = branch
+        if seeded and prev is not None and prev != branch:
+            changes.append({"session": sid, "workspace_id": s.get("workspace_id"),
+                            "branch": branch, "previous": prev})
+    return changes
+
+
 async def handle_conductor(message: str) -> str:
     """Handle CDT:* commands, returning a JSON string the web UI parses."""
     rest = message.split("CDT:", 1)[1]
@@ -239,11 +266,25 @@ async def handle_conductor(message: str) -> str:
         if verb == "projects":
             return json.dumps({"cdt": "projects", "items": cdt.list_projects()})
         if verb == "sessions":
-            return json.dumps({"cdt": "sessions", "items": cdt.list_sessions()})
+            items = cdt.list_sessions()
+            # Tell the client which chats had their branch renamed since the last
+            # fetch (Conductor renames branches over time). The client keys chats
+            # on the stable id/workspace_id and just refreshes the branch label.
+            return json.dumps({"cdt": "sessions", "items": items,
+                               "changed": _branch_changes(items)})
         if verb == "messages":
+            # Carry the chat's CURRENT identity so a client that already has this
+            # chat open updates its branch/name in place after a rename, instead
+            # of losing track of it. id/workspace_id are stable; the rest is
+            # display only.
+            ident = cdt.session_identity(arg)
             return json.dumps({
                 "cdt": "messages", "session": arg,
-                "title": cdt.session_title(arg),
+                "workspace_id": ident.get("workspace_id"),
+                "title": ident.get("title") or cdt.session_title(arg),
+                "branch": ident.get("branch"),
+                "workspace_name": ident.get("workspace_name"),
+                "directory_name": ident.get("directory_name"),
                 "items": cdt.get_messages(arg),
                 "has_token": bool(cdt.API_TOKEN),
             })
